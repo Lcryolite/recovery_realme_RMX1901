@@ -1,0 +1,121 @@
+name: Build-RMX1901-PBRP-recovery
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Cleanup Environment
+        uses: rokibhasansagar/slimhub_actions@main
+
+      - name: Set Swap Space
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 11
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            bc bison build-essential ccache curl flex g++-multilib \
+            gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev \
+            lib32readline-dev lib32z1-dev libelf-dev liblz4-tool libncurses5 \
+            libncurses5-dev libssl-dev libxml2 libxml2-utils lzop pngcrush \
+            python3 python-is-python3 rsync schedtool squashfs-tools unzip \
+            xsltproc zip zlib1g-dev binutils-aarch64-linux-gnu \
+            binutils-arm-linux-gnueabi xz-utils
+          mkdir -p "$HOME/bin"
+          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+          chmod a+x "$HOME/bin/repo"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/bin:$PATH"
+
+      - name: Sync PBRP source
+        run: |
+          mkdir -p pb_12.1
+          cd pb_12.1
+          repo init --depth=1 -u https://github.com/PitchBlackRecoveryProject/manifest_pb -b android-12.1
+          repo sync -c --force-sync --no-clone-bundle --no-tags -j2
+
+      - name: Checkout Kernel
+        uses: actions/checkout@v4.1.1
+        with:
+          repository: Lcryolite/kernel_realme_sdm710
+          ref: A17-ResukiSU
+          path: kernel
+          submodules: recursive
+
+      - name: Build Kernel
+        working-directory: kernel
+        env:
+          CROSS_COMPILE: aarch64-linux-gnu-
+          CROSS_COMPILE_ARM32: arm-linux-gnueabi-
+          ARCH: arm64
+          SUBARCH: arm64
+          KBUILD_BUILD_USER: Lcryolite
+          KBUILD_BUILD_HOST: Lcryolite
+          KERNEL_DEFCONFIG: sdm670-perf_defconfig
+          LLVM_VERSION: 22.1.8
+          LLVM_ARCHIVE_SHA256: 8d5d1e52a06e1c10e457fd36489047053ac451ddad9c88017b0d0fc6b8e5d4c0
+        run: |
+          LLVM_ARCHIVE="llvm-${LLVM_VERSION}-x86_64.tar.xz"
+          LLVM_URL="https://www.kernel.org/pub/tools/llvm/files/${LLVM_ARCHIVE}"
+          LLVM_DIR="${RUNNER_TEMP}/llvm-${LLVM_VERSION}"
+          curl -fL --retry 3 -o "${RUNNER_TEMP}/${LLVM_ARCHIVE}" "${LLVM_URL}"
+          echo "${LLVM_ARCHIVE_SHA256}  ${RUNNER_TEMP}/${LLVM_ARCHIVE}" | sha256sum -c -
+          mkdir -p "${LLVM_DIR}"
+          tar -xJf "${RUNNER_TEMP}/${LLVM_ARCHIVE}" -C "${LLVM_DIR}" --strip-components=1
+          export PATH="${LLVM_DIR}/bin:${PATH}"
+          echo "${LLVM_DIR}/bin" >> "$GITHUB_PATH"
+          clang --version | head -n 1 | grep -F "clang version ${LLVM_VERSION}"
+          ld.lld --version | head -n 1 | grep -F "LLD ${LLVM_VERSION}"
+          OUT_DIR=out ./build-clang22.sh
+          test -s out/arch/arm64/boot/Image.gz
+
+      - name: Checkout Device Tree
+        uses: actions/checkout@v4.1.1
+        with:
+          path: pb_12.1/device/realme/RMX1901
+
+      - name: Inject Kernel
+        run: |
+          python3 - "$GITHUB_WORKSPACE/pb_12.1/device/realme/RMX1901/prebuilt/Image.gz-dtb" "$GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/Image.gz" <<'PY'
+          from pathlib import Path
+          import sys
+          import zlib
+
+          recovery_image, kernel_image = map(Path, sys.argv[1:])
+          old = recovery_image.read_bytes()
+          reader = zlib.decompressobj(31)
+          reader.decompress(old)
+          reader.flush()
+          dtb_group = reader.unused_data
+          if not dtb_group.startswith(b"\xd0\r\xfe\xed"):
+              raise SystemExit("prebuilt Image.gz-dtb has no trailing DTB group")
+          new = kernel_image.read_bytes()
+          if not new.startswith(b"\x1f\x8b"):
+              raise SystemExit("kernel build did not produce a gzip Image.gz")
+          recovery_image.write_bytes(new + dtb_group)
+          PY
+
+      - name: Build PBRP
+        run: |
+          cd pb_12.1
+          source build/envsetup.sh
+          lunch pb_RMX1901-eng
+          mka pbrp -j2
+
+      - name: Upload PBRP
+        uses: actions/upload-artifact@v4.3.0
+        with:
+          name: RMX1901-PBRP
+          if-no-files-found: error
+          path: |
+            pb_12.1/out/target/product/*/*.zip
+            pb_12.1/out/target/product/*/recovery.img
