@@ -4,6 +4,11 @@ on: [workflow_dispatch]
 jobs:
   build:
     runs-on: ubuntu-22.04
+    env:
+      # This is the A17 ReSukiSU kernel that was validated on RMX1901.
+      # Keep recovery builds reproducible: update the file and this digest
+      # together only after a successful device boot test.
+      RECOVERY_KERNEL_SHA256: 65cb52b47208616b4d56ac49db3687ec0c0616e7e6554d777fc47792138135f1
    
     steps:
     - name: "Cleanup Environment"
@@ -17,7 +22,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update -y
-        sudo apt install git aria2 python2 binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi ccache curl xz-utils zip -y
+        sudo apt install git aria2 python2 ccache curl xz-utils zip -y
         git clone https://gitlab.com/OrangeFox/misc/scripts --depth=1
         cd scripts       
         sudo bash setup/android_build_env.sh
@@ -33,65 +38,29 @@ jobs:
       with:
         path: fox_12.1/device/realme/RMX1901
 
-    - name: Checkout Kernel
-      uses: actions/checkout@v4.1.1
-      with:
-        repository: Lcryolite/kernel_realme_sdm710
-        ref: A17-ResukiSU
-        path: kernel
-        submodules: recursive
-
-    - name: Build Kernel
-      working-directory: kernel
-      env:
-        CROSS_COMPILE: aarch64-linux-gnu-
-        CROSS_COMPILE_ARM32: arm-linux-gnueabi-
-        ARCH: arm64
-        SUBARCH: arm64
-        KBUILD_BUILD_USER: Lcryolite
-        KBUILD_BUILD_HOST: Lcryolite
-        KERNEL_DEFCONFIG: sdm670-perf_defconfig
-        LLVM_VERSION: 22.1.8
-        LLVM_ARCHIVE_SHA256: 8d5d1e52a06e1c10e457fd36489047053ac451ddad9c88017b0d0fc6b8e5d4c0
+    - name: Validate pinned recovery inputs
       run: |
-        LLVM_ARCHIVE="llvm-${LLVM_VERSION}-x86_64.tar.xz"
-        LLVM_URL="https://www.kernel.org/pub/tools/llvm/files/${LLVM_ARCHIVE}"
-        LLVM_DIR="${RUNNER_TEMP}/llvm-${LLVM_VERSION}"
-        curl -fL --retry 3 -o "${RUNNER_TEMP}/${LLVM_ARCHIVE}" "${LLVM_URL}"
-        echo "${LLVM_ARCHIVE_SHA256}  ${RUNNER_TEMP}/${LLVM_ARCHIVE}" | sha256sum -c -
-        mkdir -p "${LLVM_DIR}"
-        tar -xJf "${RUNNER_TEMP}/${LLVM_ARCHIVE}" -C "${LLVM_DIR}" --strip-components=1
-        export PATH="${LLVM_DIR}/bin:${PATH}"
-        echo "${LLVM_DIR}/bin" >> "$GITHUB_PATH"
-        clang --version | head -n 1 | grep -F "clang version ${LLVM_VERSION}"
-        ld.lld --version | head -n 1 | grep -F "LLD ${LLVM_VERSION}"
-        OUT_DIR=out ./build-clang22.sh
-        test -s out/arch/arm64/boot/Image.gz
+        python3 fox_12.1/device/realme/RMX1901/tools/recovery_image_guard.py kernel \
+          fox_12.1/device/realme/RMX1901/prebuilt/Image.gz-dtb \
+          --expected-sha256 "${RECOVERY_KERNEL_SHA256}"
     
     - name: Build recovery
       run: |
-        python3 - "$GITHUB_WORKSPACE/fox_12.1/device/realme/RMX1901/prebuilt/Image.gz-dtb" "$GITHUB_WORKSPACE/kernel/out/arch/arm64/boot/Image.gz" <<'PY'
-        from pathlib import Path
-        import sys
-        import zlib
-
-        recovery_image, kernel_image = map(Path, sys.argv[1:])
-        old = recovery_image.read_bytes()
-        reader = zlib.decompressobj(31)
-        reader.decompress(old)
-        reader.flush()
-        dtb_group = reader.unused_data
-        if not dtb_group.startswith(b"\xd0\r\xfe\xed"):
-            raise SystemExit("prebuilt Image.gz-dtb has no trailing DTB group")
-        new = kernel_image.read_bytes()
-        if not new.startswith(b"\x1f\x8b"):
-            raise SystemExit("kernel build did not produce a gzip Image.gz")
-        recovery_image.write_bytes(new + dtb_group)
-        PY
         cd fox_12.1
         source build/envsetup.sh || true
         lunch twrp_RMX1901-eng
         mka adbd recoveryimage -j2
+
+    - name: Verify recovery image payloads
+      run: |
+        python3 fox_12.1/device/realme/RMX1901/tools/recovery_image_guard.py image \
+          fox_12.1/out/target/product/RMX1901/recovery.img \
+          --kernel fox_12.1/device/realme/RMX1901/prebuilt/Image.gz-dtb \
+          --dtbo fox_12.1/device/realme/RMX1901/prebuilt/dtbo.img \
+          --partition-size 67108864
+        avbtool verify_image \
+          --image fox_12.1/out/target/product/RMX1901/recovery.img \
+          --key fox_12.1/external/avb/test/data/testkey_rsa4096.pem
 
     - name: Upload recovery
       uses: actions/upload-artifact@v4.3.0

@@ -27,6 +27,12 @@ lunch twrp_RMX1901-eng
 mka recoveryimage
 ```
 
+The recovery build intentionally uses the checked-in A17 ReSukiSU
+`prebuilt/Image.gz-dtb`. Do not replace it from a moving kernel branch during
+CI: that makes the same recovery commit produce different, untested images.
+When updating the kernel, boot-test the complete recovery image and update the
+`RECOVERY_KERNEL_SHA256` value in the OrangeFox workflow at the same time.
+
 To test it:
 
 ```
