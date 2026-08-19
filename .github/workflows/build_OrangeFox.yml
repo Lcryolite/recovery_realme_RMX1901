@@ -4,25 +4,48 @@ on: [workflow_dispatch]
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 180
     env:
       # This is the A17 ReSukiSU kernel that was validated on RMX1901.
       # Keep recovery builds reproducible: update the file and this digest
       # together only after a successful device boot test.
       RECOVERY_KERNEL_SHA256: 65cb52b47208616b4d56ac49db3687ec0c0616e7e6554d777fc47792138135f1
-   
+
     steps:
-    - name: "Cleanup Environment"
-      uses: rokibhasansagar/slimhub_actions@main
+    - name: Cleanup runner disk
+      timeout-minutes: 10
+      run: |
+        df -h /
+        sudo rm -rf -- \
+          /opt/ghc \
+          /opt/hostedtoolcache/CodeQL \
+          /usr/local/lib/android \
+          /usr/share/dotnet
+        sudo docker system prune --all --force || true
+        df -h /
 
     - name: Set Swap Space
       uses: pierotofy/set-swap-space@master
+      timeout-minutes: 10
       with:
         swap-size-gb: 11
         
     - name: Install dependencies
+      timeout-minutes: 90
       run: |
-        sudo apt-get update -y
-        sudo apt install git aria2 python2 ccache curl xz-utils zip -y
+        sudo sed -i \
+          's#http://azure.archive.ubuntu.com/ubuntu#https://archive.ubuntu.com/ubuntu#g' \
+          /etc/apt/apt-mirrors.txt /etc/apt/sources.list
+        sudo timeout 10m apt-get \
+          -o Acquire::Retries=3 \
+          -o Acquire::http::Timeout=30 \
+          -o Acquire::https::Timeout=30 \
+          update
+        sudo timeout 10m apt-get \
+          -o Acquire::Retries=3 \
+          -o Acquire::http::Timeout=30 \
+          -o Acquire::https::Timeout=30 \
+          install -y git aria2 python2 ccache curl xz-utils zip
         git clone https://gitlab.com/OrangeFox/misc/scripts --depth=1
         cd scripts       
         sudo bash setup/android_build_env.sh
@@ -35,16 +58,19 @@ jobs:
     
     - name: Checkout Device Tree
       uses: actions/checkout@v4.1.1
+      timeout-minutes: 10
       with:
         path: fox_12.1/device/realme/RMX1901
 
     - name: Validate pinned recovery inputs
+      timeout-minutes: 5
       run: |
         python3 fox_12.1/device/realme/RMX1901/tools/recovery_image_guard.py kernel \
           fox_12.1/device/realme/RMX1901/prebuilt/Image.gz-dtb \
           --expected-sha256 "${RECOVERY_KERNEL_SHA256}"
     
     - name: Build recovery
+      timeout-minutes: 90
       run: |
         cd fox_12.1
         source build/envsetup.sh || true
@@ -52,6 +78,7 @@ jobs:
         mka adbd recoveryimage -j2
 
     - name: Verify recovery image payloads
+      timeout-minutes: 10
       run: |
         python3 fox_12.1/device/realme/RMX1901/tools/recovery_image_guard.py image \
           fox_12.1/out/target/product/RMX1901/recovery.img \
@@ -64,6 +91,7 @@ jobs:
 
     - name: Upload recovery
       uses: actions/upload-artifact@v4.3.0
+      timeout-minutes: 10
       with:
         name: RMX1901-OFOX-RUI1-RUI2-UNZIP
         path: |
