@@ -85,7 +85,7 @@ jobs:
           --kernel fox_12.1/device/realme/RMX1901/prebuilt/Image.gz-dtb \
           --dtbo fox_12.1/device/realme/RMX1901/prebuilt/dtbo.img \
           --partition-size 67108864
-        avbtool verify_image \
+        python3 fox_12.1/external/avb/avbtool.py verify_image \
           --image fox_12.1/out/target/product/RMX1901/recovery.img \
           --key fox_12.1/external/avb/test/data/testkey_rsa4096.pem
 
