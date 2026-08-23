@@ -1,0 +1,3 @@
+#!/system/bin/sh
+# Wrapper for abx-tool encode
+exec /system/bin/abx-tool encode "$@"
