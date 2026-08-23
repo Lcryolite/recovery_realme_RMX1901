@@ -14,6 +14,6 @@ safe_write_proc() {
     shift
     local payload="$*"
     if [ -e "$target" ]; then
-        echo "$payload" > "$target" 2>/dev/null || true
+        printf '%s\n' "$payload" > "$target" 2>/dev/null || true
     fi
 }

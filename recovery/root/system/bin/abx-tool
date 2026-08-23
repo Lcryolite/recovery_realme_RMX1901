@@ -61,6 +61,13 @@ def is_abx(data: bytes) -> bool:
     return bool(data and data.startswith(ABX_MAGIC))
 
 
+def _clean_name(name: str) -> str:
+    """Strip XML namespace URIs e.g. {http://...}item -> item."""
+    if name.startswith("{"):
+        return name.split("}", 1)[1]
+    return name
+
+
 class FastDataInput:
     """Stream reader supporting Android Binary XML data formats and string interning."""
 
@@ -241,6 +248,36 @@ def abx2xml(data: bytes) -> str:
             if text_content.strip():
                 lines.append("    " * indent + saxutils.escape(text_content.strip()))
 
+        elif token == CDSECT:
+            cdata_content = (
+                reader.read_interned_utf()
+                if type_tag == TYPE_STRING_INTERNED
+                else reader.read_utf()
+            )
+            lines.append("    " * indent + f"<![CDATA[{cdata_content}]]>")
+
+        elif token == COMMENT:
+            comment_content = (
+                reader.read_interned_utf()
+                if type_tag == TYPE_STRING_INTERNED
+                else reader.read_utf()
+            )
+            lines.append("    " * indent + f"<!-- {comment_content} -->")
+
+        elif token == DOCDECL:
+            doc_content = (
+                reader.read_interned_utf()
+                if type_tag == TYPE_STRING_INTERNED
+                else reader.read_utf()
+            )
+            lines.append(f"<!DOCTYPE {doc_content}>")
+
+        elif token in (IGNORABLE_WHITESPACE, PROCESSING_INSTRUCTION, ENTITY_REF):
+            if type_tag == TYPE_STRING_INTERNED:
+                _ = reader.read_interned_utf()
+            elif type_tag == TYPE_STRING:
+                _ = reader.read_utf()
+
         elif token == END_TAG:
             indent = max(0, indent - 1)
             if type_tag == TYPE_STRING_INTERNED:
@@ -257,11 +294,13 @@ def abx2xml(data: bytes) -> str:
 
 def _encode_element(writer: FastDataOutput, elem: ET.Element) -> None:
     """Encode an XML ElementTree node into ABX stream."""
+    tag_name = _clean_name(elem.tag)
     writer.write_byte(START_TAG | (TYPE_STRING_INTERNED << 4))
-    writer.write_interned_utf(elem.tag)
+    writer.write_interned_utf(tag_name)
 
     # Encode attributes with type inference
-    for attr_name, attr_val in elem.attrib.items():
+    for raw_attr_name, attr_val in elem.attrib.items():
+        attr_name = _clean_name(raw_attr_name)
         if attr_val.lower() == "true":
             writer.write_byte(ATTRIBUTE | (TYPE_BOOLEAN_TRUE << 4))
             writer.write_interned_utf(attr_name)
@@ -282,7 +321,11 @@ def _encode_element(writer: FastDataOutput, elem: ET.Element) -> None:
                 continue
             except ValueError:
                 pass
-        else:
+        elif (
+            attr_val == "0"
+            or (attr_val.lstrip("-").isdigit() and not attr_val.startswith("0") and not attr_val.startswith("-0"))
+        ):
+            # Strict integer inference: Preserve strings with leading zeros ("001", "08") as string
             try:
                 val = int(attr_val)
                 if -2147483648 <= val <= 2147483647:
@@ -297,23 +340,26 @@ def _encode_element(writer: FastDataOutput, elem: ET.Element) -> None:
             except ValueError:
                 pass
 
-            # Fallback to string attribute
-            writer.write_byte(ATTRIBUTE | (TYPE_STRING << 4))
-            writer.write_interned_utf(attr_name)
-            writer.write_utf(attr_val)
+        # Fallback to string attribute
+        writer.write_byte(ATTRIBUTE | (TYPE_STRING << 4))
+        writer.write_interned_utf(attr_name)
+        writer.write_utf(attr_val)
 
     # Text content
     if elem.text and elem.text.strip():
         writer.write_byte(TEXT | (TYPE_STRING << 4))
         writer.write_utf(elem.text.strip())
 
-    # Children
+    # Children with tail text support
     for child in elem:
         _encode_element(writer, child)
+        if child.tail and child.tail.strip():
+            writer.write_byte(TEXT | (TYPE_STRING << 4))
+            writer.write_utf(child.tail.strip())
 
     # End tag
     writer.write_byte(END_TAG | (TYPE_STRING_INTERNED << 4))
-    writer.write_interned_utf(elem.tag)
+    writer.write_interned_utf(tag_name)
 
 
 def xml2abx(xml_str: str) -> bytes:

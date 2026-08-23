@@ -44,6 +44,7 @@ TARGET_USES_UEFI := true
 TARGET_RECOVERY_FSTAB := $(DEVICE_PATH)/recovery/root/system/etc/recovery.fstab
 
 # Kernel
+# Note: androidboot.selinux=permissive unblocks recovery init & services on 4.9.337 custom kernel.
 BOARD_KERNEL_CMDLINE := \
     console=ttyMSM0,115200n8 \
     earlycon=msm_geni_serial,0xA90000 \
