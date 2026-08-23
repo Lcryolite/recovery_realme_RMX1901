@@ -11,11 +11,11 @@
 """Android Binary XML (ABX) converter and rescue utility for Recovery environments.
 
 Supports bidirectional conversion between Android 12-16 Binary XML (ABX)
-and standard plain-text XML with full token, namespace, and mixed-content fidelity.
+and standard plain-text XML for the token, namespace, and mixed-content forms
+that can be represented safely by this implementation.
 """
 
 import argparse
-import base64
 import io
 import struct
 import sys
@@ -60,6 +60,52 @@ KNOWN_NAMESPACES = {
     "app": "http://schemas.android.com/apk/res-auto",
     "tools": "http://schemas.android.com/tools",
 }
+PREDEFINED_NAMESPACES = {
+    "xml": "http://www.w3.org/XML/1998/namespace",
+}
+SUPPORTED_NAMESPACES = {**KNOWN_NAMESPACES, **PREDEFINED_NAMESPACES}
+NAMESPACE_PREFIXES = {uri: prefix for prefix, uri in SUPPORTED_NAMESPACES.items()}
+
+
+class ABXTreeBuilder(ET.TreeBuilder):
+    """Tree builder that retains comments and processing instructions outside the root."""
+
+    def __init__(self) -> None:
+        super().__init__(insert_comments=True, insert_pis=True)
+        self.depth = 0
+        self.root_closed = False
+        self.leading_nodes: List[ET.Element] = []
+        self.trailing_nodes: List[ET.Element] = []
+
+    def start(self, tag: str, attrs: Dict[str, str]) -> ET.Element:
+        self.depth += 1
+        return super().start(tag, attrs)
+
+    def end(self, tag: str) -> ET.Element:
+        node = super().end(tag)
+        self.depth -= 1
+        if self.depth == 0:
+            self.root_closed = True
+        return node
+
+    def comment(self, data: str) -> None:
+        node = ET.Comment(data)
+        target = self.trailing_nodes if self.root_closed else self.leading_nodes
+        if self.depth == 0:
+            target.append(node)
+        else:
+            super().comment(data)
+
+    def pi(self, target: str, data: Optional[str] = None) -> None:
+        node = ET.ProcessingInstruction(target, data or "")
+        target_nodes = self.trailing_nodes if self.root_closed else self.leading_nodes
+        if self.depth == 0:
+            target_nodes.append(node)
+        else:
+            super().pi(target, data)
+
+    def doctype(self, name: str, pubid: Optional[str], system: Optional[str]) -> None:
+        raise ValueError("DOCTYPE is not supported by xml2abx without data loss")
 
 
 def is_abx(data: bytes) -> bool:
@@ -68,12 +114,28 @@ def is_abx(data: bytes) -> bool:
 
 
 def _resolve_qname(name: str, ns_map: Dict[str, str]) -> str:
-    """Map Clark notation {uri}localname to prefix:localname if prefix known."""
+    """Map Clark notation {uri}localname to a supported prefix."""
     if name.startswith("{"):
-        uri, local = name[1:].split("}", 1)
+        try:
+            uri, local = name[1:].split("}", 1)
+        except ValueError as exc:
+            raise ValueError(f"Malformed qualified XML name: {name!r}") from exc
         prefix = ns_map.get(uri)
-        return f"{prefix}:{local}" if prefix else local
+        if prefix is None:
+            raise ValueError(f"Unsupported XML namespace URI: {uri}")
+        return f"{prefix}:{local}"
     return name
+
+
+def _validate_abx_qname(name: str, *, is_attribute: bool = False) -> None:
+    """Reject ABX names whose prefix cannot be mapped to a declared XML namespace."""
+    parts = name.split(":")
+    if len(parts) > 2 or any(not part for part in parts):
+        raise ValueError(f"Unsupported ABX namespace prefix in name: {name!r}")
+    if len(parts) == 2 and parts[0] not in SUPPORTED_NAMESPACES:
+        raise ValueError(f"Unsupported ABX namespace prefix in name: {name!r}")
+    if is_attribute and name == "xmlns":
+        raise ValueError("ABX namespace declarations are not supported as attributes")
 
 
 class FastDataInput:
@@ -173,6 +235,57 @@ class FastDataOutput:
             self.string_refs[s] = len(self.string_refs)
 
 
+def _read_token_string(reader: FastDataInput, type_tag: int, token_name: str) -> str:
+    if type_tag == TYPE_STRING:
+        return reader.read_utf()
+    if type_tag == TYPE_STRING_INTERNED:
+        return reader.read_interned_utf()
+    raise ValueError(f"Unsupported ABX {token_name} type: {type_tag}")
+
+
+def _infer_attribute_value(value: str) -> Tuple[int, object]:
+    if value.lower() == "true":
+        return TYPE_BOOLEAN_TRUE, None
+    if value.lower() == "false":
+        return TYPE_BOOLEAN_FALSE, None
+
+    lower_value = value.lower()
+    if lower_value.startswith(("0x", "-0x")):
+        try:
+            number = int(value, 16)
+            if hex(number) == lower_value:
+                if -2147483648 <= number <= 2147483647:
+                    return TYPE_INT_HEX, number
+                if -9223372036854775808 <= number <= 9223372036854775807:
+                    return TYPE_LONG_HEX, number
+        except ValueError:
+            pass
+
+    if value == "0" or (
+        value.lstrip("-").isdigit()
+        and not value.startswith("0")
+        and not value.startswith("-0")
+    ):
+        number = int(value)
+        if -2147483648 <= number <= 2147483647:
+            return TYPE_INT, number
+        if -9223372036854775808 <= number <= 9223372036854775807:
+            return TYPE_LONG, number
+
+    if "." in value:
+        try:
+            number = float(value)
+            float32 = struct.unpack(">f", struct.pack(">f", number))[0]
+            if str(float32) == value:
+                return TYPE_FLOAT, float32
+            if str(number) == value:
+                return TYPE_DOUBLE, number
+        except (ValueError, OverflowError, struct.error):
+            pass
+
+    return TYPE_STRING, value
+
+
 def abx2xml(data: bytes) -> str:
     """Decode Android Binary XML (ABX) binary payload into a formatted XML string."""
     if not is_abx(data):
@@ -181,11 +294,11 @@ def abx2xml(data: bytes) -> str:
     stream = io.BytesIO(data[4:])
     reader = FastDataInput(stream)
 
-    out = io.StringIO()
-    out.write('<?xml version="1.0" encoding="utf-8"?>\n')
-
-    root_written = False
+    parts: List[str] = ['<?xml version="1.0" encoding="utf-8"?>\n']
+    root_part_index: Optional[int] = None
     used_prefixes: Set[str] = set()
+    document_started = False
+    document_ended = False
 
     while True:
         b = reader.peek_byte()
@@ -196,15 +309,22 @@ def abx2xml(data: bytes) -> str:
         type_tag = b >> 4
 
         if token == START_DOCUMENT:
+            if type_tag != TYPE_NULL or document_started:
+                raise ValueError("Invalid or duplicate ABX start-document token")
+            document_started = True
             continue
-        elif token == END_DOCUMENT:
+        if not document_started:
+            raise ValueError("ABX content appears before the start-document token")
+        if token == END_DOCUMENT:
+            if type_tag != TYPE_NULL:
+                raise ValueError("Invalid ABX end-document token type")
+            document_ended = True
+            if reader.peek_byte() is not None:
+                raise ValueError("ABX stream contains data after the end-document token")
             break
         elif token == START_TAG:
-            tag_name = (
-                reader.read_interned_utf()
-                if type_tag == TYPE_STRING_INTERNED
-                else reader.read_utf()
-            )
+            tag_name = _read_token_string(reader, type_tag, "start-tag")
+            _validate_abx_qname(tag_name)
             if ":" in tag_name:
                 used_prefixes.add(tag_name.split(":", 1)[0])
 
@@ -216,6 +336,7 @@ def abx2xml(data: bytes) -> str:
                 next_b = reader.read_byte()
                 attr_type = next_b >> 4
                 attr_name = reader.read_interned_utf()
+                _validate_abx_qname(attr_name, is_attribute=True)
                 if ":" in attr_name:
                     used_prefixes.add(attr_name.split(":", 1)[0])
 
@@ -239,101 +360,81 @@ def abx2xml(data: bytes) -> str:
                     attr_val = "true"
                 elif attr_type == TYPE_BOOLEAN_FALSE:
                     attr_val = "false"
-                elif attr_type == TYPE_BYTES_HEX:
-                    raw_len = reader.read_short()
-                    attr_val = reader.read_bytes(raw_len).hex()
-                elif attr_type == TYPE_BYTES_BASE64:
-                    raw_len = reader.read_short()
-                    attr_val = base64.b64encode(reader.read_bytes(raw_len)).decode("ascii")
-                elif attr_type == TYPE_NULL:
-                    attr_val = ""
+                elif attr_type in (TYPE_NULL, TYPE_BYTES_HEX, TYPE_BYTES_BASE64):
+                    raise ValueError(
+                        f"ABX attribute type {attr_type} cannot be represented losslessly as XML"
+                    )
                 else:
-                    attr_val = ""
+                    raise ValueError(f"Unsupported ABX attribute type: {attr_type}")
 
+                inferred_type = _infer_attribute_value(attr_val)[0]
+                comparable_type = TYPE_STRING if attr_type == TYPE_STRING_INTERNED else attr_type
+                if inferred_type != comparable_type:
+                    raise ValueError(
+                        f"ABX attribute {attr_name!r} cannot round-trip without changing type"
+                    )
                 attrs.append((attr_name, attr_val))
 
-            # On root element, declare any standard namespace prefixes used
-            ns_decls = []
-            if not root_written:
-                root_written = True
-                for pfx in used_prefixes:
-                    if pfx in KNOWN_NAMESPACES and not any(k == f"xmlns:{pfx}" for k, _ in attrs):
-                        ns_decls.append((f"xmlns:{pfx}", KNOWN_NAMESPACES[pfx]))
-
-            all_attrs = ns_decls + attrs
-            attr_str = "".join(f" {k}={saxutils.quoteattr(v)}" for k, v in all_attrs)
-            out.write(f"<{tag_name}{attr_str}>")
+            attr_str = "".join(f" {k}={saxutils.quoteattr(v)}" for k, v in attrs)
+            parts.append(f"<{tag_name}{attr_str}>")
+            if root_part_index is None:
+                root_part_index = len(parts) - 1
 
         elif token == TEXT:
-            text_content = (
-                reader.read_interned_utf()
-                if type_tag == TYPE_STRING_INTERNED
-                else reader.read_utf()
-            )
-            out.write(saxutils.escape(text_content))
+            text_content = _read_token_string(reader, type_tag, "text")
+            parts.append(saxutils.escape(text_content))
 
         elif token == CDSECT:
-            cdata_content = (
-                reader.read_interned_utf()
-                if type_tag == TYPE_STRING_INTERNED
-                else reader.read_utf()
-            )
-            out.write(f"<![CDATA[{cdata_content}]]>")
+            raise ValueError("ABX CDATA tokens cannot round-trip losslessly")
 
         elif token == COMMENT:
-            comment_content = (
-                reader.read_interned_utf()
-                if type_tag == TYPE_STRING_INTERNED
-                else reader.read_utf()
-            )
-            out.write(f"<!-- {comment_content} -->")
+            comment_content = _read_token_string(reader, type_tag, "comment")
+            parts.append(f"<!--{comment_content}-->")
 
         elif token == DOCDECL:
-            doc_content = (
-                reader.read_interned_utf()
-                if type_tag == TYPE_STRING_INTERNED
-                else reader.read_utf()
-            )
-            out.write(f"<!DOCTYPE {doc_content}>\n")
+            raise ValueError("ABX document declarations cannot round-trip losslessly")
 
         elif token == ENTITY_REF:
-            entity_name = (
-                reader.read_interned_utf()
-                if type_tag == TYPE_STRING_INTERNED
-                else reader.read_utf()
-            )
-            out.write(f"&{entity_name};")
+            raise ValueError("ABX entity-reference tokens cannot round-trip losslessly")
 
         elif token == PROCESSING_INSTRUCTION:
-            pi_content = (
-                reader.read_interned_utf()
-                if type_tag == TYPE_STRING_INTERNED
-                else reader.read_utf()
-            )
-            out.write(f"<?{pi_content}?>")
+            pi_content = _read_token_string(reader, type_tag, "processing instruction")
+            parts.append(f"<?{pi_content}?>")
 
         elif token == IGNORABLE_WHITESPACE:
-            ws_content = (
-                reader.read_interned_utf()
-                if type_tag == TYPE_STRING_INTERNED
-                else reader.read_utf()
-            )
-            out.write(ws_content)
+            raise ValueError("ABX ignorable-whitespace tokens cannot round-trip losslessly")
 
         elif token == END_TAG:
-            tag_name = (
-                reader.read_interned_utf()
-                if type_tag == TYPE_STRING_INTERNED
-                else reader.read_utf()
-            )
-            out.write(f"</{tag_name}>")
+            tag_name = _read_token_string(reader, type_tag, "end-tag")
+            _validate_abx_qname(tag_name)
+            parts.append(f"</{tag_name}>")
 
         else:
             raise ValueError(f"Invalid or unexpected ABX token: {token} (byte: {b:#04x})")
 
-    res = out.getvalue()
+    if not document_ended:
+        raise ValueError("ABX stream is missing the end-document token")
+    if root_part_index is None:
+        raise ValueError("ABX stream does not contain a root element")
+
+    namespace_attrs = "".join(
+        f" xmlns:{prefix}={saxutils.quoteattr(KNOWN_NAMESPACES[prefix])}"
+        for prefix in sorted(used_prefixes)
+        if prefix in KNOWN_NAMESPACES
+    )
+    root_part = parts[root_part_index]
+    insert_at = root_part.rfind(">")
+    if insert_at < 0:
+        raise ValueError("ABX root element has malformed output")
+    parts[root_part_index] = root_part[:insert_at] + namespace_attrs + root_part[insert_at:]
+
+    res = "".join(parts)
     if not res.endswith("\n"):
         res += "\n"
+    try:
+        ET.fromstring(res)
+    except ET.ParseError as exc:
+        raise ValueError(f"ABX stream does not produce well-formed XML: {exc}") from exc
     return res
 
 
@@ -342,13 +443,13 @@ def _encode_node(writer: FastDataOutput, node: ET.Element, ns_map: Dict[str, str
     tag = node.tag
 
     # Handle Comments
-    if callable(tag) and "Comment" in repr(tag):
+    if tag is ET.Comment:
         writer.write_byte(COMMENT | (TYPE_STRING << 4))
         writer.write_utf(node.text or "")
         return
 
     # Handle Processing Instructions
-    if callable(tag) and ("PI" in repr(tag) or "ProcessingInstruction" in repr(tag)):
+    if tag is ET.ProcessingInstruction:
         writer.write_byte(PROCESSING_INSTRUCTION | (TYPE_STRING << 4))
         writer.write_utf(node.text or "")
         return
@@ -360,78 +461,20 @@ def _encode_node(writer: FastDataOutput, node: ET.Element, ns_map: Dict[str, str
     # Encode attributes with type inference
     for raw_attr_name, attr_val in node.attrib.items():
         attr_name = _resolve_qname(raw_attr_name, ns_map)
+        attr_type, encoded_value = _infer_attribute_value(attr_val)
+        writer.write_byte(ATTRIBUTE | (attr_type << 4))
+        writer.write_interned_utf(attr_name)
 
-        # 1. Boolean
-        if attr_val.lower() == "true":
-            writer.write_byte(ATTRIBUTE | (TYPE_BOOLEAN_TRUE << 4))
-            writer.write_interned_utf(attr_name)
-        elif attr_val.lower() == "false":
-            writer.write_byte(ATTRIBUTE | (TYPE_BOOLEAN_FALSE << 4))
-            writer.write_interned_utf(attr_name)
-
-        # 2. Hex (check leading zero preservation)
-        elif attr_val.startswith("0x") or attr_val.startswith("0X"):
-            try:
-                val = int(attr_val, 16)
-                if hex(val).lower() == attr_val.lower():
-                    if -2147483648 <= val <= 2147483647:
-                        writer.write_byte(ATTRIBUTE | (TYPE_INT_HEX << 4))
-                        writer.write_interned_utf(attr_name)
-                        writer.write_int(val)
-                        continue
-                    else:
-                        writer.write_byte(ATTRIBUTE | (TYPE_LONG_HEX << 4))
-                        writer.write_interned_utf(attr_name)
-                        writer.write_long(val)
-                        continue
-            except ValueError:
-                pass
-            writer.write_byte(ATTRIBUTE | (TYPE_STRING << 4))
-            writer.write_interned_utf(attr_name)
-            writer.write_utf(attr_val)
-
-        # 3. Decimal integer (strictly without leading zeros)
-        elif (
-            attr_val == "0"
-            or (attr_val.lstrip("-").isdigit() and not attr_val.startswith("0") and not attr_val.startswith("-0"))
-        ):
-            try:
-                val = int(attr_val)
-                if -2147483648 <= val <= 2147483647:
-                    writer.write_byte(ATTRIBUTE | (TYPE_INT << 4))
-                    writer.write_interned_utf(attr_name)
-                    writer.write_int(val)
-                else:
-                    writer.write_byte(ATTRIBUTE | (TYPE_LONG << 4))
-                    writer.write_interned_utf(attr_name)
-                    writer.write_long(val)
-                continue
-            except ValueError:
-                pass
-            writer.write_byte(ATTRIBUTE | (TYPE_STRING << 4))
-            writer.write_interned_utf(attr_name)
-            writer.write_utf(attr_val)
-
-        # 4. Float / Double (e.g. "3.14")
-        elif "." in attr_val:
-            try:
-                fval = float(attr_val)
-                if str(fval) == attr_val:
-                    writer.write_byte(ATTRIBUTE | (TYPE_FLOAT << 4))
-                    writer.write_interned_utf(attr_name)
-                    writer.write_float(fval)
-                    continue
-            except ValueError:
-                pass
-            writer.write_byte(ATTRIBUTE | (TYPE_STRING << 4))
-            writer.write_interned_utf(attr_name)
-            writer.write_utf(attr_val)
-
-        # 5. Fallback string
-        else:
-            writer.write_byte(ATTRIBUTE | (TYPE_STRING << 4))
-            writer.write_interned_utf(attr_name)
-            writer.write_utf(attr_val)
+        if attr_type == TYPE_STRING:
+            writer.write_utf(str(encoded_value))
+        elif attr_type in (TYPE_INT, TYPE_INT_HEX):
+            writer.write_int(int(encoded_value))
+        elif attr_type in (TYPE_LONG, TYPE_LONG_HEX):
+            writer.write_long(int(encoded_value))
+        elif attr_type == TYPE_FLOAT:
+            writer.write_float(float(encoded_value))
+        elif attr_type == TYPE_DOUBLE:
+            writer.write_double(float(encoded_value))
 
     # Text content (exact whitespace preserved)
     if node.text:
@@ -451,16 +494,17 @@ def _encode_node(writer: FastDataOutput, node: ET.Element, ns_map: Dict[str, str
 
 
 def xml2abx(xml_str: str) -> bytes:
-    """Encode an XML string into standard Android Binary XML (ABX) payload."""
-    events = ET.iterparse(io.StringIO(xml_str), events=["start-ns"])
-    ns_map: Dict[str, str] = dict(KNOWN_NAMESPACES)
-    for event, (prefix, uri) in events:
-        if prefix:
-            ns_map[uri] = prefix
-
-    parser = ET.XMLParser(target=ET.TreeBuilder(insert_comments=True, insert_pis=True))
+    """Encode representable XML into a standard Android Binary XML (ABX) payload."""
+    builder = ABXTreeBuilder()
+    parser = ET.XMLParser(target=builder)
     parser.feed(xml_str)
     root = parser.close()
+
+    events = ET.iterparse(io.StringIO(xml_str), events=["start-ns"])
+    ns_map: Dict[str, str] = dict(NAMESPACE_PREFIXES)
+    for _, (_, uri) in events:
+        if uri and uri not in NAMESPACE_PREFIXES:
+            raise ValueError(f"Unsupported XML namespace URI: {uri}")
 
     out = io.BytesIO()
     writer = FastDataOutput(out)
@@ -468,7 +512,11 @@ def xml2abx(xml_str: str) -> bytes:
     writer.write_bytes(ABX_MAGIC)
     writer.write_byte(START_DOCUMENT | (TYPE_NULL << 4))
 
+    for node in builder.leading_nodes:
+        _encode_node(writer, node, ns_map)
     _encode_node(writer, root, ns_map)
+    for node in builder.trailing_nodes:
+        _encode_node(writer, node, ns_map)
 
     writer.write_byte(END_DOCUMENT | (TYPE_NULL << 4))
     return out.getvalue()
