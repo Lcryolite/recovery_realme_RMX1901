@@ -1,0 +1,7 @@
+#!/system/bin/sh
+# Atomic single-write printf wrapper for Recovery environment
+# Prevents vendor /proc drivers from misinterpreting segmented writes as separate commands
+
+_raw=$(command -p printf "$@" 2>/dev/null || builtin printf "$@" 2>/dev/null || toybox printf "$@" 2>/dev/null || busybox printf "$@" 2>/dev/null; echo -n "_EOB_")
+_buf="${_raw%_EOB_}"
+command -p printf "%s" "$_buf" 2>/dev/null || builtin printf "%s" "$_buf"

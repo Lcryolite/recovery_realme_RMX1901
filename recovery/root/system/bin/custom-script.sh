@@ -1,6 +1,16 @@
 #!/system/bin/sh
 
-FP_ID=$(cat /proc/fp_id)
+FP_ID=$(cat /proc/fp_id 2>/dev/null || true)
+
+# Helper for safe atomic write to proc/sys nodes
+safe_write_proc() {
+    local target="$1"
+    shift
+    local payload="$*"
+    if [ -e "$target" ]; then
+        echo "$payload" > "$target" 2>/dev/null || true
+    fi
+}
 
 # setprop *boot* property because we dont like resetting it
 # ro.build.product overrides to support non-unified custom ROMs

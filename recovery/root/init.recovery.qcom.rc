@@ -35,9 +35,12 @@ on fs
 
 on init
     setprop vendor.gatekeeper.disable_spu true
+    export ENV /system/etc/mkshrc
+    export BASH_ENV /system/etc/bash.bashrc
 
 on boot
     chmod 0777 /system/bin/custom-script.sh
+    chmod 0755 /system/bin/printf
     start custom-script
 
 on property:ro.boot.prjname=*
