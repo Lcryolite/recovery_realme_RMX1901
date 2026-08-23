@@ -19,3 +19,7 @@ htmlcov/
 # Temporary / OS files
 .DS_Store
 Thumbs.db
+
+# Local developer notes and backport guides
+KERNEL_ZSTD_BACKPORT.md
+*.local.md
