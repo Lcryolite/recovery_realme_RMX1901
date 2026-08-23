@@ -50,7 +50,8 @@ BOARD_KERNEL_CMDLINE := \
     androidboot.hardware=qcom \
     androidboot.console=ttyMSM0 \
     androidboot.boot_devices=soc/1d84000.ufshc \
-    video=vfb:640x400,bpp=32,memsize=3072000 \
+    androidboot.selinux=permissive \
+    firmware_class.path=/vendor/firmware_mnt/image \
     msm_rtb.filter=0x237 \
     ehci-hcd.park=3 \
     lpm_levels.sleep_disabled=1 \
@@ -126,6 +127,9 @@ TW_INCLUDE_REPACKTOOLS := true
 TW_INCLUDE_EROFS := true
 
 # TWRP specific build flags
+TARGET_USES_DRM := true
+TW_USE_NEW_MINUI := true
+TW_TARGET_USES_QCOM_BSP := true
 TARGET_RECOVERY_QCOM_RTC_FIX := true
 TARGET_RECOVERY_PIXEL_FORMAT := RGBX_8888
 TARGET_USE_CUSTOM_LUN_FILE_PATH := /config/usb_gadget/g1/functions/mass_storage.0/lun.%d/file
