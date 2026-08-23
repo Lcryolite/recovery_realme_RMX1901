@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """Unit tests for Android Binary XML (ABX) conversion and recovery rescue tools."""
 
-import io
-import os
-import struct
 import sys
 import tempfile
 import unittest
@@ -70,6 +67,19 @@ class ABXToolTest(unittest.TestCase):
         self.assertIn('inactive="false"', decoded_xml)
         self.assertIn("Some text content", decoded_xml)
 
+    def test_xml_attribute_and_text_escaping(self):
+        sample_xml = (
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            '<root title="Rock &amp; Roll &quot;Special&quot;" note="a &lt; b">\n'
+            "    1 &lt; 2 &amp; 3 &gt; 0\n"
+            "</root>"
+        )
+        abx_data = abx_tool.xml2abx(sample_xml)
+        decoded_xml = abx_tool.abx2xml(abx_data)
+
+        self.assertIn("&amp;", decoded_xml)
+        self.assertIn("&lt;", decoded_xml)
+
     def test_cli_file_conversion(self):
         xml_content = '<root key="value"><child index="1"/></root>'
 
@@ -95,7 +105,7 @@ class ABXToolTest(unittest.TestCase):
 
     def test_rejects_corrupted_abx(self):
         corrupted = b"ABX\x00\xff\xff\xff"
-        with self.assertRaises(Exception):
+        with self.assertRaises(ValueError):
             abx_tool.abx2xml(corrupted)
 
 

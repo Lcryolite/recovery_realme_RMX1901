@@ -1,14 +1,12 @@
 #!/system/bin/sh
 
-FP_ID=$(cat /proc/fp_id 2>/dev/null || true)
-
 # Helper for safe atomic write to proc/sys nodes
 safe_write_proc() {
     local target="$1"
     shift
     local payload="$*"
     if [ -e "$target" ]; then
-        echo "$payload" > "$target" 2>/dev/null || true
+        printf '%s\n' "$payload" > "$target" 2>/dev/null || true
     fi
 }
 
@@ -39,4 +37,4 @@ else
     resetprop ro.product.device RMX1901
 fi
 
-resetprop ro.product.product.device $(getprop ro.build.product)
+resetprop ro.product.product.device "$(getprop ro.build.product)"

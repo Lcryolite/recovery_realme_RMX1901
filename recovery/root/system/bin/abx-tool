@@ -1,11 +1,18 @@
-#!/usr/bin/env python3
+#!/bin/sh
+''''which python3 >/dev/null 2>&1 && exec python3 "$0" "$@" || {
+    for p in /system/bin/python3 /system/bin/python /sbin/python3 /sbin/python python3 python; do
+        command -v "$p" >/dev/null 2>&1 && exec "$p" "$0" "$@"
+        [ -x "$p" ] && exec "$p" "$0" "$@"
+    done
+    echo "abx-tool: Python 3 interpreter not found in recovery" >&2
+    exit 127
+}
+'''
 """Android Binary XML (ABX) converter and rescue utility for Recovery environments.
 
 Supports bidirectional conversion between Android 12-16 Binary XML (ABX)
 and standard plain-text XML.
 """
-
-from __future__ import annotations
 
 import argparse
 import base64
@@ -13,8 +20,9 @@ import io
 import struct
 import sys
 import xml.etree.ElementTree as ET
+import xml.sax.saxutils as saxutils
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Dict, List, Optional, Tuple
 
 ABX_MAGIC = b"ABX\x00"
 
@@ -58,7 +66,7 @@ class FastDataInput:
 
     def __init__(self, stream: BinaryIO):
         self.stream = stream
-        self.strings: list[str] = []
+        self.strings: List[str] = []
 
     def read_bytes(self, count: int) -> bytes:
         data = self.stream.read(count)
@@ -99,7 +107,7 @@ class FastDataInput:
             return self.strings[ref]
         raise ValueError(f"Invalid string intern reference: {ref} (pool size: {len(self.strings)})")
 
-    def peek_byte(self) -> int | None:
+    def peek_byte(self) -> Optional[int]:
         pos = self.stream.tell()
         data = self.stream.read(1)
         self.stream.seek(pos)
@@ -111,7 +119,7 @@ class FastDataOutput:
 
     def __init__(self, stream: BinaryIO):
         self.stream = stream
-        self.string_refs: dict[str, int] = {}
+        self.string_refs: Dict[str, int] = {}
 
     def write_bytes(self, data: bytes) -> None:
         self.stream.write(data)
@@ -158,7 +166,7 @@ def abx2xml(data: bytes) -> str:
     stream = io.BytesIO(data[4:])
     reader = FastDataInput(stream)
 
-    lines: list[str] = ['<?xml version="1.0" encoding="utf-8"?>']
+    lines: List[str] = ['<?xml version="1.0" encoding="utf-8"?>']
     indent = 0
 
     while True:
@@ -179,7 +187,7 @@ def abx2xml(data: bytes) -> str:
             else:
                 tag_name = reader.read_utf()
 
-            attrs: list[tuple[str, str]] = []
+            attrs: List[Tuple[str, str]] = []
             while True:
                 next_b = reader.peek_byte()
                 if next_b is None or (next_b & 0x0F) != ATTRIBUTE:
@@ -221,7 +229,7 @@ def abx2xml(data: bytes) -> str:
 
                 attrs.append((attr_name, attr_val))
 
-            attr_str = "".join(f' {k}="{v}"' for k, v in attrs)
+            attr_str = "".join(f" {k}={saxutils.quoteattr(v)}" for k, v in attrs)
             lines.append("    " * indent + f"<{tag_name}{attr_str}>")
             indent += 1
 
@@ -231,7 +239,7 @@ def abx2xml(data: bytes) -> str:
             else:
                 text_content = reader.read_utf()
             if text_content.strip():
-                lines.append("    " * indent + text_content.strip())
+                lines.append("    " * indent + saxutils.escape(text_content.strip()))
 
         elif token == END_TAG:
             indent = max(0, indent - 1)
@@ -346,7 +354,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
 
     try:

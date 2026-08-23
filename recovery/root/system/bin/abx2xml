@@ -1,3 +1,7 @@
-#!/system/bin/sh
+#!/bin/sh
 # Wrapper for abx-tool decode
-exec /system/bin/abx-tool decode "$@"
+if [ -x /system/bin/abx-tool ]; then
+    exec /system/bin/abx-tool decode "$@"
+else
+    exec abx-tool decode "$@"
+fi

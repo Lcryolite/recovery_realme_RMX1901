@@ -1,3 +1,7 @@
-#!/system/bin/sh
+#!/bin/sh
 # Wrapper for abx-tool encode
-exec /system/bin/abx-tool encode "$@"
+if [ -x /system/bin/abx-tool ]; then
+    exec /system/bin/abx-tool encode "$@"
+else
+    exec abx-tool encode "$@"
+fi

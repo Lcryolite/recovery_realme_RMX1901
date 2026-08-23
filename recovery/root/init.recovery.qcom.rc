@@ -39,7 +39,7 @@ on init
     export BASH_ENV /system/etc/bash.bashrc
 
 on boot
-    chmod 0777 /system/bin/custom-script.sh
+    chmod 0755 /system/bin/custom-script.sh
     chmod 0755 /system/bin/printf
     chmod 0755 /system/bin/abx-tool
     chmod 0755 /system/bin/abx2xml
