@@ -39,6 +39,37 @@ To test it:
 fastboot flash /path/to/recovery.img
 ```
 
+## Terminal Rescue Tools & Usage Guide
+
+The recovery environment includes built-in rescue tools accessible via ADB Shell or the Recovery Terminal:
+
+### 1. Android Binary XML (ABX) Toolchain
+Android 12–16 stores system configurations (e.g. `packages.xml`, `settings_global.xml`, runtime permissions) in Binary XML (`ABX\0`) format. Use the built-in ABX tools to inspect or edit them:
+
+```sh
+# Check if a file is in ABX format
+abx-tool info /data/system/packages.xml
+
+# Decode ABX to human-readable XML
+abx2xml /data/system/packages.xml /tmp/packages.xml
+# Or using abx-tool directly:
+abx-tool decode /data/system/users/0/settings_global.xml /tmp/settings.xml
+
+# Encode modified XML back to ABX binary
+xml2abx /tmp/packages.xml /data/system/packages.xml
+```
+
+### 2. Atomic /proc Node Writing
+To prevent vendor touchpanel/kernel proc drivers from interpreting split stream chunks as distinct commands, a buffered `printf` wrapper and `safe_write_proc` helper are loaded by default in the shell:
+
+```sh
+# Safe single-syscall write to vendor proc nodes
+safe_write_proc /proc/touchpanel/tp_fw_update 0
+```
+
+### 3. EFS & Baseband Disaster Recovery
+EFS partitions (`modemst1`, `modemst2`, `fsg`, `fsc`, `oppostanvbk`) and Modem/DSP firmware are mapped in `twrp.flags` and included in OrangeFox Quick Backup (`OF_QUICK_BACKUP_LIST`) for one-click backup and restore.
+
 ## Note about ozip decrypt
 * This is necessary for downgrades back to stock android-9.0 (ColorOS).
 * Early versions of android-10.0(Realme UI v1) have decryptor built into the updater binary so this patch isnt necessary.
