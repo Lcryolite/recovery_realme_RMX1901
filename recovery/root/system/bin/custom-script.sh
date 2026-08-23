@@ -17,13 +17,26 @@ safe_write_proc() {
 # ro.product.product.device overrides to support realme ui 1 flash
 
 if grep -q androidboot.prjname /proc/cmdline; then
-    echo "custom-script: Detected realme UI 2 firmware" > /tmp/recovery.log
+    echo "custom-script: Detected realme UI 2 firmware" >> /tmp/recovery.log
     resetprop ro.device.latest_fw true
 else
-    echo "custom-script: Detected realme UI 1 firmware" > /tmp/recovery.log
+    echo "custom-script: Detected realme UI 1 firmware" >> /tmp/recovery.log
     resetprop ro.device.latest_fw false
 fi
 
-  setprop ro.boot.prjname 19605
-  resetprop ro.build.product RMX1901
-  resetprop ro.product.product.device $(getprop ro.build.product)
+OPPO_PRJ=$(cat /proc/oppoVersion/prjName 2>/dev/null || true)
+BOOT_PRJ=$(getprop ro.boot.prjname)
+
+if grep -q 19601 /proc/cmdline || [ "$OPPO_PRJ" = "19601" ] || [ "$BOOT_PRJ" = "19601" ]; then
+    echo "custom-script: Detected RMX1901CN (prjname 19601)" >> /tmp/recovery.log
+    setprop ro.boot.prjname 19601
+    resetprop ro.build.product RMX1901CN
+    resetprop ro.product.device RMX1901CN
+else
+    echo "custom-script: Detected RMX1901 (prjname 19605)" >> /tmp/recovery.log
+    setprop ro.boot.prjname 19605
+    resetprop ro.build.product RMX1901
+    resetprop ro.product.device RMX1901
+fi
+
+resetprop ro.product.product.device $(getprop ro.build.product)

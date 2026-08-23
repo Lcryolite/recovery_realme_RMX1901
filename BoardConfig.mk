@@ -41,7 +41,7 @@ TARGET_NO_BOOTLOADER := true
 TARGET_USES_UEFI := true
 
 # fstab
-TARGET_RECOVERY_FSTAB := $(DEVICE_PATH)//recovery/root/system/etc/recovery.fstab
+TARGET_RECOVERY_FSTAB := $(DEVICE_PATH)/recovery/root/system/etc/recovery.fstab
 
 # Kernel
 BOARD_KERNEL_CMDLINE := \
@@ -89,8 +89,7 @@ BOARD_USES_METADATA_PARTITION := true
 TARGET_USERIMAGES_USE_F2FS := true
 TARGET_USERIMAGES_USE_EXT4 := true
 
-# Workaround for error copying vendor files to recovery ramdisk
-BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
+# Target copy out vendor
 TARGET_COPY_OUT_VENDOR := vendor
 
 # Recovery
