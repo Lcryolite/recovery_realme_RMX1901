@@ -10,6 +10,9 @@ jobs:
       # Keep recovery builds reproducible: update the file and this digest
       # together only after a successful device boot test.
       RECOVERY_KERNEL_SHA256: 65cb52b47208616b4d56ac49db3687ec0c0616e7e6554d777fc47792138135f1
+      RECOVERY_DTBO_SHA256: ce97df9ec60a81200e3d49b0814d862402c0bc929ea529bbd0c134e74ff38cbe
+      ORANGEFOX_BUILD_ENV_SHA: 265b1a256e061d9f3ca6e6767c6aa2bce4d9cb1a
+      ORANGEFOX_SYNC_SHA: 14eca5f7ef82c9dacfe353db8b93329383c7293f
 
     steps:
     - name: Cleanup runner disk
@@ -25,10 +28,13 @@ jobs:
         df -h /
 
     - name: Set Swap Space
-      uses: pierotofy/set-swap-space@master
       timeout-minutes: 10
-      with:
-        swap-size-gb: 11
+      run: |
+        sudo fallocate -l 11G /swapfile
+        sudo chmod 600 /swapfile
+        sudo mkswap /swapfile
+        sudo swapon /swapfile
+        swapon --show
         
     - name: Install dependencies
       timeout-minutes: 90
@@ -46,18 +52,20 @@ jobs:
           -o Acquire::http::Timeout=30 \
           -o Acquire::https::Timeout=30 \
           install -y git aria2 python2 ccache curl xz-utils zip
-        git clone https://gitlab.com/OrangeFox/misc/scripts --depth=1
+        git clone https://gitlab.com/OrangeFox/misc/scripts
         cd scripts       
+        git checkout --detach "${ORANGEFOX_BUILD_ENV_SHA}"
         sudo bash setup/android_build_env.sh
         cd -
         mkdir OrangeFox_sync
         cd OrangeFox_sync
-        git clone https://gitlab.com/OrangeFox/sync.git --depth=1
+        git clone https://gitlab.com/OrangeFox/sync.git
         cd sync/
-        ./orangefox_sync.sh --branch 12.1 --path $GITHUB_WORKSPACE/fox_12.1 
+        git checkout --detach "${ORANGEFOX_SYNC_SHA}"
+        ./orangefox_sync.sh --branch 12.1 --path "${GITHUB_WORKSPACE}/fox_12.1"
     
     - name: Checkout Device Tree
-      uses: actions/checkout@v4.1.1
+      uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       timeout-minutes: 10
       with:
         path: fox_12.1/device/realme/RMX1901
@@ -68,6 +76,10 @@ jobs:
         python3 fox_12.1/device/realme/RMX1901/tools/recovery_image_guard.py kernel \
           fox_12.1/device/realme/RMX1901/prebuilt/Image.gz-dtb \
           --expected-sha256 "${RECOVERY_KERNEL_SHA256}"
+        printf '%s  %s\n' \
+          "${RECOVERY_DTBO_SHA256}" \
+          fox_12.1/device/realme/RMX1901/prebuilt/dtbo.img \
+          | sha256sum --check --strict
     
     - name: Build recovery
       timeout-minutes: 90
@@ -90,7 +102,7 @@ jobs:
           --key fox_12.1/external/avb/test/data/testkey_rsa4096.pem
 
     - name: Upload recovery
-      uses: actions/upload-artifact@v4.3.0
+      uses: actions/upload-artifact@26f96dfa697d77e81fd5907df203aa23a56210a8 # v4.3.0
       timeout-minutes: 10
       with:
         name: RMX1901-OFOX-RUI1-RUI2-UNZIP
