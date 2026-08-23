@@ -130,7 +130,6 @@ TW_INCLUDE_EROFS := true
 # TWRP specific build flags
 TARGET_USES_DRM := true
 TW_USE_NEW_MINUI := true
-TW_TARGET_USES_QCOM_BSP := true
 TARGET_RECOVERY_QCOM_RTC_FIX := true
 TARGET_RECOVERY_PIXEL_FORMAT := RGBX_8888
 TARGET_USE_CUSTOM_LUN_FILE_PATH := /config/usb_gadget/g1/functions/mass_storage.0/lun.%d/file
