@@ -6,10 +6,11 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 180
     env:
-      # This is the A17 ReSukiSU kernel that was validated on RMX1901.
+      # kernel_realme_sdm710 stock-next@0e62fd551cff83cd864a124a488d394c642ebdc3
+      # with ReSukiSU@faccf4c5edc7be37776216e7d43dd3dca0239331.
       # Keep recovery builds reproducible: update the file and this digest
       # together only after a successful device boot test.
-      RECOVERY_KERNEL_SHA256: 65cb52b47208616b4d56ac49db3687ec0c0616e7e6554d777fc47792138135f1
+      RECOVERY_KERNEL_SHA256: 979039ee19c79bd0c834049d810b160a568b5e137d7bb6fd359405167cdbbb7a
       RECOVERY_DTBO_SHA256: ce97df9ec60a81200e3d49b0814d862402c0bc929ea529bbd0c134e74ff38cbe
       ORANGEFOX_BUILD_ENV_SHA: 265b1a256e061d9f3ca6e6767c6aa2bce4d9cb1a
       ORANGEFOX_SYNC_SHA: 14eca5f7ef82c9dacfe353db8b93329383c7293f
