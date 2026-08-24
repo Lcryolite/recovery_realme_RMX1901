@@ -95,7 +95,7 @@ jobs:
         cd fox_12.1
         source build/envsetup.sh || true
         lunch twrp_RMX1901-eng
-        mka adbd recoveryimage -j2
+        mka adbd recoveryimage -j4
 
     - name: Verify recovery image payloads
       timeout-minutes: 10
