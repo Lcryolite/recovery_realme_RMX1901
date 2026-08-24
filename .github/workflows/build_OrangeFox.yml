@@ -6,11 +6,10 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 180
     env:
-      # kernel_realme_sdm710 stock-next@0e62fd551cff83cd864a124a488d394c642ebdc3
-      # with ReSukiSU@faccf4c5edc7be37776216e7d43dd3dca0239331.
-      # Keep recovery builds reproducible: update the file and this digest
-      # together only after a successful device boot test.
-      RECOVERY_KERNEL_SHA256: 979039ee19c79bd0c834049d810b160a568b5e137d7bb6fd359405167cdbbb7a
+      # Diagnostic baseline: the R11.3 BloodMoon kernel from device tree
+      # commit 48841736baebdbd6b3d633d916b78fe522b6ea03.
+      # Keep the R12 userspace and DTBO unchanged to isolate the kernel.
+      RECOVERY_KERNEL_SHA256: 34dfd87279559781567266e8659a0e4e3ed903cefce8b1c39b26d9cdadb0a1ab
       RECOVERY_DTBO_SHA256: ce97df9ec60a81200e3d49b0814d862402c0bc929ea529bbd0c134e74ff38cbe
       ORANGEFOX_BUILD_ENV_SHA: 265b1a256e061d9f3ca6e6767c6aa2bce4d9cb1a
       ORANGEFOX_SYNC_SHA: 14eca5f7ef82c9dacfe353db8b93329383c7293f
