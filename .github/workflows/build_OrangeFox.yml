@@ -10,7 +10,7 @@ jobs:
       LINUX_COMMIT: 8d3ae59288f1e7d58d76558a6ee96d533bc5019f
       ORANGEFOX_BUILD_ENV_SHA: 265b1a256e061d9f3ca6e6767c6aa2bce4d9cb1a
       ORANGEFOX_SYNC_SHA: 14eca5f7ef82c9dacfe353db8b93329383c7293f
-      CCACHE_DIR: ${{ runner.temp }}/rmx1901-ccache
+      CCACHE_DIR: /tmp/rmx1901-ccache
       CCACHE_EXEC: /usr/bin/ccache
       CCACHE_BASEDIR: ${{ github.workspace }}
       USE_CCACHE: 1
@@ -88,7 +88,7 @@ jobs:
       uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       timeout-minutes: 10
       with:
-        path: ${{ runner.temp }}/rmx1901-ccache-restore
+        path: /tmp/rmx1901-ccache-restore
         key: ${{ runner.os }}-ccache-${{ env.ORANGEFOX_BUILD_ENV_SHA }}-${{ env.ORANGEFOX_SYNC_SHA }}-${{ github.ref_name }}-${{ github.sha }}
         restore-keys: |
           ${{ runner.os }}-ccache-${{ env.ORANGEFOX_BUILD_ENV_SHA }}-${{ env.ORANGEFOX_SYNC_SHA }}-${{ github.ref_name }}-
@@ -97,7 +97,7 @@ jobs:
     - name: Configure ccache
       timeout-minutes: 5
       run: |
-        RESTORED_CCACHE_DIR="${RUNNER_TEMP}/rmx1901-ccache-restore"
+        RESTORED_CCACHE_DIR=/tmp/rmx1901-ccache-restore
         install -d -m 0755 "${CCACHE_DIR}"
         if [[ -d "${RESTORED_CCACHE_DIR}" ]]; then
           cp -R --no-preserve=mode,ownership,timestamps "${RESTORED_CCACHE_DIR}/." "${CCACHE_DIR}/"
@@ -194,5 +194,5 @@ jobs:
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       timeout-minutes: 10
       with:
-        path: ${{ runner.temp }}/rmx1901-ccache
+        path: /tmp/rmx1901-ccache
         key: ${{ runner.os }}-ccache-${{ env.ORANGEFOX_BUILD_ENV_SHA }}-${{ env.ORANGEFOX_SYNC_SHA }}-${{ github.ref_name }}-${{ github.sha }}

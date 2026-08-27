@@ -15,7 +15,7 @@ class WorkflowConfigTest(unittest.TestCase):
             r"(?m)^\s*CCACHE_EXEC:\s*/usr/bin/ccache\s*$",
         )
         self.assertIn(
-            "CCACHE_DIR: ${{ runner.temp }}/rmx1901-ccache",
+            "CCACHE_DIR: /tmp/rmx1901-ccache",
             contents,
         )
         self.assertRegex(contents, r"(?m)^\s*USE_CCACHE:\s*1\s*$")
@@ -24,7 +24,7 @@ class WorkflowConfigTest(unittest.TestCase):
         contents = WORKFLOW.read_text()
 
         self.assertIn(
-            "path: ${{ runner.temp }}/rmx1901-ccache-restore",
+            "path: /tmp/rmx1901-ccache-restore",
             contents,
         )
         self.assertIn(
