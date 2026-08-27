@@ -1,22 +1,35 @@
 # recovery_device_realme_RMX1901
-Recovery tree for realme X
+Recovery tree for realme X (RMX1901)
 
-## Features
+The `mainline-7.x` branch builds an OrangeFox recovery around the official
+Linux v7.2 commit `8d3ae59288f1e7d58d76558a6ee96d533bc5019f`. The device DTS,
+kernel configuration fragment, and kernel build script are under `mainline/`.
 
-Works:
+## Status
 
- - Everything
+The DTS compiles against Linux v7.2 and the repository image-guard tests pass.
+Recovery boot, UFS crypto, display, touch, and the complete UI remain pending
+real-device validation.
 
 ## Compile
 
-First checkout manifest :
+First checkout the OrangeFox manifest:
 
 ```
 repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1
 repo sync -c
 ```
 
-Then clone the current device tree onto device/realme/RMX1901
+Then clone this device tree into `device/realme/RMX1901`, and check out the
+pinned mainline kernel:
+
+```
+git clone -b mainline-7.x https://github.com/Lcryolite/recovery_realme_RMX1901.git device/realme/RMX1901
+git clone --filter=blob:none --no-checkout https://github.com/torvalds/linux.git linux
+git -C linux fetch --depth=1 origin 8d3ae59288f1e7d58d76558a6ee96d533bc5019f
+git -C linux checkout --detach 8d3ae59288f1e7d58d76558a6ee96d533bc5019f
+device/realme/RMX1901/mainline/build_kernel.sh "$PWD/linux"
+```
 
 
 Finally execute these:
@@ -27,20 +40,26 @@ lunch twrp_RMX1901-eng
 mka recoveryimage
 ```
 
-The recovery build intentionally uses the checked-in `stock-next` ReSukiSU
-`prebuilt/Image.gz-dtb`, built from `kernel_realme_sdm710` commit
-`0e62fd551cff83cd864a124a488d394c642ebdc3` with ReSukiSU commit
-`faccf4c5edc7be37776216e7d43dd3dca0239331`. Do not replace it from a moving
-kernel branch during CI: that makes the same recovery commit produce different,
-untested images.
-When updating the kernel, boot-test the complete recovery image and update the
-`RECOVERY_KERNEL_SHA256` value in the OrangeFox workflow at the same time.
+The kernel script copies the board DTS into the Linux source, applies
+`mainline/kernel.fragment`, builds `Image.gz` plus the DTB, and generates
+`prebuilt/Image.gz-dtb`. This branch does not use a checked-in `dtbo.img` or a
+recovery DTBO; the recovery image contains the mainline DTB appended to the
+kernel image.
 
 To test it:
 
 ```
-fastboot flash /path/to/recovery.img
+fastboot boot /path/to/recovery.img
 ```
+
+This branch has passed static DTS compilation and repository-level image-guard
+tests. A real-device boot test is still required. Linux v7.2 does not currently
+include the RMX1901 AMOLED panel driver or the S3706 touch driver, so the board
+description initially relies on the bootloader-retained simple framebuffer and
+should be treated as a bring-up baseline. UFS crypto, display, touch, and
+recovery UI behavior remain unverified until hardware testing. Mainline v7.2
+does not provide the Android downstream MTP gadget; recovery USB requests for
+MTP therefore fall back to ADB, while configfs mass storage is enabled.
 
 ## Terminal Rescue Tools & Usage Guide
 

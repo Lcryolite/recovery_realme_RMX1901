@@ -44,7 +44,7 @@ TARGET_USES_UEFI := true
 TARGET_RECOVERY_FSTAB := $(DEVICE_PATH)/recovery/root/system/etc/recovery.fstab
 
 # Kernel
-# Note: androidboot.selinux=permissive unblocks recovery init & services on 4.9.337 custom kernel.
+# Keep only boot arguments consumed by the mainline kernel and recovery.
 BOARD_KERNEL_CMDLINE := \
     console=ttyMSM0,115200n8 \
     earlycon=msm_geni_serial,0xA90000 \
@@ -52,17 +52,10 @@ BOARD_KERNEL_CMDLINE := \
     androidboot.console=ttyMSM0 \
     androidboot.boot_devices=soc/1d84000.ufshc \
     androidboot.selinux=permissive \
-    firmware_class.path=/vendor/firmware_mnt/image \
-    msm_rtb.filter=0x237 \
-    ehci-hcd.park=3 \
-    lpm_levels.sleep_disabled=1 \
-    service_locator.enable=1 \
     androidboot.configfs=true \
     androidboot.usbcontroller=a600000.dwc3 \
-    swiotlb=1 \
     loop.max_part=7 \
-    printk.devkmsg=on \
-    kpti=off
+    printk.devkmsg=on
 
 BOARD_KERNEL_BASE := 0x00000000
 BOARD_KERNEL_PAGESIZE := 4096
@@ -70,11 +63,10 @@ BOARD_KERNEL_IMAGE_NAME := Image.gz-dtb
 TARGET_KERNEL_ARCH := arm64
 TARGET_KERNEL_HEADER_ARCH := arm64
 TARGET_NO_KERNEL := false
-BOARD_KERNEL_SEPARATED_DTBO := true
-BOARD_INCLUDE_RECOVERY_DTBO := true
+BOARD_KERNEL_SEPARATED_DTBO := false
+BOARD_INCLUDE_RECOVERY_DTBO := false
 BOARD_MKBOOTIMG_ARGS += --ramdisk_offset 0x01000000 --tags_offset 0x00000100 --header_version 1
 TARGET_PREBUILT_KERNEL := $(DEVICE_PATH)/prebuilt/Image.gz-dtb
-BOARD_PREBUILT_DTBOIMAGE := $(DEVICE_PATH)/prebuilt/dtbo.img
 
 # Partitions
 BOARD_FLASH_BLOCK_SIZE := 262144
@@ -128,6 +120,7 @@ TW_INCLUDE_REPACKTOOLS := true
 TW_INCLUDE_EROFS := true
 
 # TWRP specific build flags
+# The mainline board exposes the bootloader-retained framebuffer to simpledrm.
 TARGET_USES_DRM := true
 TW_USE_NEW_MINUI := true
 TARGET_RECOVERY_QCOM_RTC_FIX := true

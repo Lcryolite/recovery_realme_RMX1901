@@ -95,11 +95,11 @@ def u64(image: bytes, offset: int) -> int:
 
 
 def validate_recovery_image(
-    path: Path, kernel_path: Path, dtbo_path: Path, partition_size: int
+    path: Path, kernel_path: Path, dtbo_path: Path | None, partition_size: int
 ) -> None:
     image = path.read_bytes()
     kernel = kernel_path.read_bytes()
-    dtbo = dtbo_path.read_bytes()
+    dtbo = dtbo_path.read_bytes() if dtbo_path else b""
 
     if len(image) != partition_size:
         raise ValidationError(
@@ -137,12 +137,15 @@ def validate_recovery_image(
     if ramdisk_offset + ramdisk_size > len(image):
         raise ValidationError("recovery ramdisk extends past the image")
 
-    if recovery_dtbo_size != len(dtbo):
-        raise ValidationError(
-            f"recovery DTBO size is {recovery_dtbo_size}, expected {len(dtbo)}"
-        )
-    if image[recovery_dtbo_offset : recovery_dtbo_offset + recovery_dtbo_size] != dtbo:
-        raise ValidationError("recovery image does not contain the pinned DTBO")
+    if dtbo_path:
+        if recovery_dtbo_size != len(dtbo):
+            raise ValidationError(
+                f"recovery DTBO size is {recovery_dtbo_size}, expected {len(dtbo)}"
+            )
+        if image[recovery_dtbo_offset : recovery_dtbo_offset + recovery_dtbo_size] != dtbo:
+            raise ValidationError("recovery image does not contain the pinned DTBO")
+    elif recovery_dtbo_size:
+        raise ValidationError("recovery image unexpectedly contains a recovery DTBO")
     if image[-64:-60] != AVB_FOOTER_MAGIC:
         raise ValidationError("recovery image has no AVB footer")
 
@@ -163,7 +166,7 @@ def parser() -> argparse.ArgumentParser:
     image_parser = subparsers.add_parser("image")
     image_parser.add_argument("path", type=Path)
     image_parser.add_argument("--kernel", required=True, type=Path)
-    image_parser.add_argument("--dtbo", required=True, type=Path)
+    image_parser.add_argument("--dtbo", type=Path)
     image_parser.add_argument("--partition-size", required=True, type=int)
     return command_parser
 

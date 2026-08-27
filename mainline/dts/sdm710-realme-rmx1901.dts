@@ -1,0 +1,161 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Device tree for the Realme X (RMX1901) recovery kernel.
+ *
+ * The panel and S3706 touch controller are currently initialized by the
+ * downstream boot chain. The recovery keeps the bootloader framebuffer and
+ * brings up the mainline UFS and USB paths first.
+ */
+
+/dts-v1/;
+
+#include "sdm710.dtsi"
+#include "pm660.dtsi"
+#include "pm660l.dtsi"
+
+/ {
+	model = "Realme X";
+	compatible = "realme,rmx1901", "qcom,sdm710", "qcom,sdm670";
+	qcom,msm-id = <360 0x0>, <393 0x0>;
+
+	chosen {
+		bootargs = "regulator_ignore_unused pd_ignore_unused";
+		stdout-path = "framebuffer0";
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		framebuffer0: framebuffer@9c000000 {
+			compatible = "simple-framebuffer";
+			reg = <0 0x9c000000 0 0x2300000>;
+			width = <1080>;
+			height = <2340>;
+			stride = <4320>;
+			format = "a8r8g8b8";
+			status = "okay";
+		};
+	};
+
+	reserved-memory {
+		framebuffer@9c000000 {
+			reg = <0 0x9c000000 0 0x2300000>;
+			no-map;
+		};
+	};
+
+	vph_pwr: vph-pwr-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "vph_pwr";
+		regulator-min-microvolt = <3312000>;
+		regulator-max-microvolt = <3312000>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	vreg_s2b_1p05: vreg-s2b-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "vreg_s2b";
+		regulator-min-microvolt = <1050000>;
+		regulator-max-microvolt = <1050000>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+};
+
+&apps_rsc {
+	regulators-0 {
+		compatible = "qcom,pm660-rpmh-regulators";
+		qcom,pmic-id = "a";
+
+		vdd-s1-supply = <&vph_pwr>;
+		vdd-s2-supply = <&vph_pwr>;
+		vdd-s3-supply = <&vph_pwr>;
+		vdd-s4-supply = <&vph_pwr>;
+		vdd-s5-supply = <&vph_pwr>;
+		vdd-s6-supply = <&vph_pwr>;
+		vdd-l1-l6-l7-supply = <&vreg_s6a_0p87>;
+		vdd-l2-l3-supply = <&vreg_s2b_1p05>;
+		vdd-l5-supply = <&vreg_s2b_1p05>;
+		vdd-l8-l9-l10-l11-l12-l13-l14-supply = <&vreg_s4a_2p04>;
+		vdd-l15-l16-l17-l18-l19-supply = <&vreg_bob>;
+
+		vreg_s4a_2p04: smps4 {
+			regulator-min-microvolt = <1808000>;
+			regulator-max-microvolt = <2040000>;
+			regulator-enable-ramp-delay = <200>;
+		};
+
+		vreg_s6a_0p87: smps6 {
+			regulator-min-microvolt = <1224000>;
+			regulator-max-microvolt = <1352000>;
+			regulator-enable-ramp-delay = <150>;
+		};
+
+		vreg_l10a_1p8: ldo10 {
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-enable-ramp-delay = <250>;
+		};
+	};
+
+	regulators-1 {
+		compatible = "qcom,pm660l-rpmh-regulators";
+		qcom,pmic-id = "b";
+
+		vdd-s1-supply = <&vph_pwr>;
+		vdd-s2-supply = <&vph_pwr>;
+		vdd-s3-s4-supply = <&vph_pwr>;
+		vdd-s5-supply = <&vph_pwr>;
+		vdd-l1-l9-l10-supply = <&vreg_s2b_1p05>;
+		vdd-l2-supply = <&vreg_bob>;
+		vdd-l3-l5-l7-l8-supply = <&vreg_bob>;
+		vdd-l4-l6-supply = <&vreg_bob>;
+		vdd-bob-supply = <&vph_pwr>;
+
+		vreg_l1b_0p925: ldo1 {
+			regulator-min-microvolt = <880000>;
+			regulator-max-microvolt = <900000>;
+			regulator-enable-ramp-delay = <250>;
+		};
+
+		vreg_l4b_2p95: ldo4 {
+			regulator-min-microvolt = <2960000>;
+			regulator-max-microvolt = <2960000>;
+			regulator-enable-ramp-delay = <250>;
+		};
+
+		vreg_l7b_3p125: ldo7 {
+			regulator-min-microvolt = <3088000>;
+			regulator-max-microvolt = <3100000>;
+			regulator-enable-ramp-delay = <250>;
+		};
+
+		vreg_l8b_3p3: ldo8 {
+			regulator-min-microvolt = <3300000>;
+			regulator-max-microvolt = <3312000>;
+			regulator-enable-ramp-delay = <250>;
+		};
+
+		vreg_bob: bob {
+			regulator-min-microvolt = <3296000>;
+			regulator-max-microvolt = <3328000>;
+			regulator-enable-ramp-delay = <500>;
+		};
+	};
+};
+
+&usb_1_hsphy {
+	vdd-supply = <&vreg_l1b_0p925>;
+	vdda-pll-supply = <&vreg_l10a_1p8>;
+	vdda-phy-dpdm-supply = <&vreg_l7b_3p125>;
+	status = "okay";
+};
+
+&usb_1 {
+	status = "okay";
+};
+
+&usb_1_dwc3 {
+	dr_mode = "peripheral";
+	maximum-speed = "high-speed";
+};

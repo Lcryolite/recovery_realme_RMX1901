@@ -1,4 +1,4 @@
-name: Build-RMX1901-OrangeFox-recovery
+name: Build-RMX1901-mainline-OrangeFox-recovery
 on: [workflow_dispatch]
 
 jobs:
@@ -6,12 +6,8 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 180
     env:
-      # kernel_realme_sdm710 stock-next@0e62fd551cff83cd864a124a488d394c642ebdc3
-      # with ReSukiSU@faccf4c5edc7be37776216e7d43dd3dca0239331.
-      # Keep recovery builds reproducible: update the file and this digest
-      # together only after a successful device boot test.
-      RECOVERY_KERNEL_SHA256: 979039ee19c79bd0c834049d810b160a568b5e137d7bb6fd359405167cdbbb7a
-      RECOVERY_DTBO_SHA256: ce97df9ec60a81200e3d49b0814d862402c0bc929ea529bbd0c134e74ff38cbe
+      LINUX_REPO: https://github.com/torvalds/linux.git
+      LINUX_COMMIT: 8d3ae59288f1e7d58d76558a6ee96d533bc5019f
       ORANGEFOX_BUILD_ENV_SHA: 265b1a256e061d9f3ca6e6767c6aa2bce4d9cb1a
       ORANGEFOX_SYNC_SHA: 14eca5f7ef82c9dacfe353db8b93329383c7293f
 
@@ -43,7 +39,7 @@ jobs:
         sudo mkswap "${SWAP_FILE}"
         sudo swapon "${SWAP_FILE}"
         swapon --show
-        
+
     - name: Install dependencies
       timeout-minutes: 90
       run: |
@@ -59,43 +55,56 @@ jobs:
           -o Acquire::Retries=3 \
           -o Acquire::http::Timeout=30 \
           -o Acquire::https::Timeout=30 \
-          install -y git aria2 python2 ccache curl xz-utils zip
+          install -y \
+          git aria2 python2 ccache curl xz-utils zip bc bison flex \
+          libssl-dev libelf-dev gcc-aarch64-linux-gnu device-tree-compiler
+
         git clone https://gitlab.com/OrangeFox/misc/scripts
-        cd scripts       
+        cd scripts
         git checkout --detach "${ORANGEFOX_BUILD_ENV_SHA}"
         sudo bash setup/android_build_env.sh
         cd -
+
         mkdir OrangeFox_sync
         cd OrangeFox_sync
         git clone https://gitlab.com/OrangeFox/sync.git
-        cd sync/
+        cd sync
         git checkout --detach "${ORANGEFOX_SYNC_SHA}"
         ./orangefox_sync.sh --branch 12.1 --path "${GITHUB_WORKSPACE}/fox_12.1"
-    
+
     - name: Checkout Device Tree
       uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       timeout-minutes: 10
       with:
         path: fox_12.1/device/realme/RMX1901
 
-    - name: Validate pinned recovery inputs
+    - name: Checkout Linux v7.2
+      timeout-minutes: 20
+      run: |
+        git clone --filter=blob:none --no-checkout "${LINUX_REPO}" linux
+        git -C linux fetch --depth=1 origin "${LINUX_COMMIT}"
+        git -C linux checkout --detach "${LINUX_COMMIT}"
+        test "$(git -C linux rev-parse HEAD)" = "${LINUX_COMMIT}"
+
+    - name: Build mainline kernel
+      timeout-minutes: 60
+      run: |
+        LINUX_COMMIT="${LINUX_COMMIT}" KERNEL_JOBS="$(nproc)" \
+          bash fox_12.1/device/realme/RMX1901/mainline/build_kernel.sh linux
+
+    - name: Validate mainline kernel
       timeout-minutes: 5
       run: |
         python3 fox_12.1/device/realme/RMX1901/tools/recovery_image_guard.py kernel \
-          fox_12.1/device/realme/RMX1901/prebuilt/Image.gz-dtb \
-          --expected-sha256 "${RECOVERY_KERNEL_SHA256}"
-        printf '%s  %s\n' \
-          "${RECOVERY_DTBO_SHA256}" \
-          fox_12.1/device/realme/RMX1901/prebuilt/dtbo.img \
-          | sha256sum --check --strict
-    
+          fox_12.1/device/realme/RMX1901/prebuilt/Image.gz-dtb
+
     - name: Build recovery
       timeout-minutes: 90
       run: |
         cd fox_12.1
         source build/envsetup.sh || true
         lunch twrp_RMX1901-eng
-        mka adbd recoveryimage -j4
+        mka adbd recoveryimage -j"$(nproc)"
 
     - name: Verify recovery image payloads
       timeout-minutes: 10
@@ -103,7 +112,6 @@ jobs:
         python3 fox_12.1/device/realme/RMX1901/tools/recovery_image_guard.py image \
           fox_12.1/out/target/product/RMX1901/recovery.img \
           --kernel fox_12.1/device/realme/RMX1901/prebuilt/Image.gz-dtb \
-          --dtbo fox_12.1/device/realme/RMX1901/prebuilt/dtbo.img \
           --partition-size 67108864
         python3 fox_12.1/external/avb/avbtool.py verify_image \
           --image fox_12.1/out/target/product/RMX1901/recovery.img \
@@ -113,8 +121,7 @@ jobs:
       uses: actions/upload-artifact@26f96dfa697d77e81fd5907df203aa23a56210a8 # v4.3.0
       timeout-minutes: 10
       with:
-        name: RMX1901-OFOX-RUI1-RUI2-UNZIP
+        name: RMX1901-mainline-OFOX
         path: |
+          fox_12.1/out/target/product/*/recovery.img
           fox_12.1/out/target/product/*/Orange*.zip
-      
- 

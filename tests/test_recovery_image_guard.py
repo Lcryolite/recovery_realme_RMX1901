@@ -87,6 +87,22 @@ class RecoveryImageGuardTest(unittest.TestCase):
                     image_path, kernel_path, dtbo_path, partition_size
                 )
 
+    def test_recovery_can_omit_dtbo(self):
+        kernel = fake_kernel()
+        partition_size = 16384
+        image = fake_recovery_image(kernel, b"", partition_size)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image_path = root / "recovery.img"
+            kernel_path = root / "Image.gz-dtb"
+            image_path.write_bytes(image)
+            kernel_path.write_bytes(kernel)
+
+            guard.validate_recovery_image(
+                image_path, kernel_path, None, partition_size
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
