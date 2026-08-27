@@ -12,6 +12,7 @@ fi
 CROSS_COMPILE="${3:-${CROSS_COMPILE:-aarch64-linux-gnu-}}"
 JOBS="${4:-${KERNEL_JOBS:-$(nproc)}}"
 LINUX_COMMIT="${LINUX_COMMIT:-8d3ae59288f1e7d58d76558a6ee96d533bc5019f}"
+DTS_NAME="sdm710-realme-rmx1901.dts"
 DTB_NAME="sdm710-realme-rmx1901.dtb"
 DTS_DIR="${KERNEL_SOURCE}/arch/arm64/boot/dts/qcom"
 DTB_ENTRY='dtb-$(CONFIG_ARCH_QCOM) += sdm710-realme-rmx1901.dtb'
@@ -29,8 +30,8 @@ fi
 
 install -D -m 0644 "${SCRIPT_DIR}/dts/sdm710.dtsi" \
     "${DTS_DIR}/sdm710.dtsi"
-install -D -m 0644 "${SCRIPT_DIR}/dts/${DTB_NAME}" \
-    "${DTS_DIR}/${DTB_NAME}"
+install -D -m 0644 "${SCRIPT_DIR}/dts/${DTS_NAME}" \
+    "${DTS_DIR}/${DTS_NAME}"
 
 if ! grep -Fqx "${DTB_ENTRY}" "${DTS_DIR}/Makefile"; then
     printf '\n%s\n' "${DTB_ENTRY}" >> "${DTS_DIR}/Makefile"
