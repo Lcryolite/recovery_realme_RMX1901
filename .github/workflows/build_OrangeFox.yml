@@ -10,6 +10,9 @@ jobs:
       LINUX_COMMIT: 8d3ae59288f1e7d58d76558a6ee96d533bc5019f
       ORANGEFOX_BUILD_ENV_SHA: 265b1a256e061d9f3ca6e6767c6aa2bce4d9cb1a
       ORANGEFOX_SYNC_SHA: 14eca5f7ef82c9dacfe353db8b93329383c7293f
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      USE_CCACHE: 1
 
     steps:
     - name: Cleanup runner disk
@@ -79,6 +82,34 @@ jobs:
       with:
         path: fox_12.1/device/realme/RMX1901
 
+    - name: Restore ccache
+      id: ccache_restore
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      timeout-minutes: 10
+      with:
+        path: .ccache
+        key: ${{ runner.os }}-ccache-${{ env.ORANGEFOX_BUILD_ENV_SHA }}-${{ env.ORANGEFOX_SYNC_SHA }}-${{ github.ref_name }}-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-ccache-${{ env.ORANGEFOX_BUILD_ENV_SHA }}-${{ env.ORANGEFOX_SYNC_SHA }}-${{ github.ref_name }}-
+          ${{ runner.os }}-ccache-${{ env.ORANGEFOX_BUILD_ENV_SHA }}-${{ env.ORANGEFOX_SYNC_SHA }}-
+
+    - name: Configure ccache
+      timeout-minutes: 5
+      run: |
+        mkdir -p "${CCACHE_DIR}"
+        ccache --set-config=max_size=5G
+        ccache --set-config=compression=true
+        ccache --zero-stats
+        ccache --version
+        ccache --show-config
+
+    - name: Configure build parallelism
+      timeout-minutes: 5
+      run: |
+        BUILD_JOBS="$(nproc)"
+        echo "BUILD_JOBS=${BUILD_JOBS}" >> "${GITHUB_ENV}"
+        echo "Using ${BUILD_JOBS} parallel build jobs"
+
     - name: Checkout Linux v7.2
       timeout-minutes: 20
       run: |
@@ -88,11 +119,30 @@ jobs:
         git -C linux checkout --detach "${LINUX_COMMIT}"
         test "$(git -C linux rev-parse HEAD)" = "${LINUX_COMMIT}"
 
+    - name: Restore kernel build cache
+      id: kernel_cache_restore
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      timeout-minutes: 10
+      with:
+        path: linux/out-rmx1901
+        key: ${{ runner.os }}-linux-${{ env.LINUX_COMMIT }}-${{ github.ref_name }}-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-linux-${{ env.LINUX_COMMIT }}-${{ github.ref_name }}-
+          ${{ runner.os }}-linux-${{ env.LINUX_COMMIT }}-
+
     - name: Build mainline kernel
       timeout-minutes: 60
       run: |
-        LINUX_COMMIT="${LINUX_COMMIT}" KERNEL_JOBS="$(nproc)" \
+        LINUX_COMMIT="${LINUX_COMMIT}" KERNEL_JOBS="${BUILD_JOBS}" \
           bash fox_12.1/device/realme/RMX1901/mainline/build_kernel.sh linux
+
+    - name: Save kernel build cache
+      if: always() && steps.kernel_cache_restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      timeout-minutes: 10
+      with:
+        path: linux/out-rmx1901
+        key: ${{ runner.os }}-linux-${{ env.LINUX_COMMIT }}-${{ github.ref_name }}-${{ github.sha }}
 
     - name: Validate mainline kernel
       timeout-minutes: 5
@@ -106,7 +156,7 @@ jobs:
         cd fox_12.1
         source build/envsetup.sh || true
         lunch twrp_RMX1901-eng
-        mka adbd recoveryimage -j"$(nproc)"
+        mka adbd recoveryimage -j"${BUILD_JOBS}"
 
     - name: Verify recovery image payloads
       timeout-minutes: 10
@@ -127,3 +177,16 @@ jobs:
         path: |
           fox_12.1/out/target/product/*/recovery.img
           fox_12.1/out/target/product/*/Orange*.zip
+
+    - name: Show ccache stats
+      if: always()
+      timeout-minutes: 5
+      run: ccache --show-stats
+
+    - name: Save ccache
+      if: always() && steps.ccache_restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      timeout-minutes: 10
+      with:
+        path: .ccache
+        key: ${{ runner.os }}-ccache-${{ env.ORANGEFOX_BUILD_ENV_SHA }}-${{ env.ORANGEFOX_SYNC_SHA }}-${{ github.ref_name }}-${{ github.sha }}
