@@ -88,7 +88,7 @@ jobs:
       uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       timeout-minutes: 10
       with:
-        path: .ccache
+        path: .ccache-restore
         key: ${{ runner.os }}-ccache-${{ env.ORANGEFOX_BUILD_ENV_SHA }}-${{ env.ORANGEFOX_SYNC_SHA }}-${{ github.ref_name }}-${{ github.sha }}
         restore-keys: |
           ${{ runner.os }}-ccache-${{ env.ORANGEFOX_BUILD_ENV_SHA }}-${{ env.ORANGEFOX_SYNC_SHA }}-${{ github.ref_name }}-
@@ -98,6 +98,10 @@ jobs:
       timeout-minutes: 5
       run: |
         mkdir -p "${CCACHE_DIR}"
+        if [[ -d .ccache-restore ]]; then
+          cp -R --no-preserve=mode,ownership,timestamps .ccache-restore/. "${CCACHE_DIR}/"
+        fi
+        chmod -R u+rwX "${CCACHE_DIR}"
         ccache --set-config=max_size=5G
         ccache --set-config=compression=true
         ccache --zero-stats
