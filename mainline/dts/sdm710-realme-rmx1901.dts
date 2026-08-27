@@ -2,9 +2,8 @@
 /*
  * Device tree for the Realme X (RMX1901) recovery kernel.
  *
- * The panel and S3706 touch controller are currently initialized by the
- * downstream boot chain. The recovery keeps the bootloader framebuffer and
- * brings up the mainline UFS and USB paths first.
+ * The panel and S3706 touch controller use the mainline DRM/RMI4 paths. The
+ * bootloader framebuffer remains available as a fallback during bring-up.
  */
 
 /dts-v1/;
@@ -12,6 +11,8 @@
 #include "sdm710.dtsi"
 #include "pm660.dtsi"
 #include "pm660l.dtsi"
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/interrupt-controller/irq.h>
 
 / {
 	model = "Realme X";
@@ -60,6 +61,17 @@
 		regulator-always-on;
 		regulator-boot-on;
 	};
+
+	touch_vdd_2p8: touch-vdd-2p8-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "touch_vdd_2p8";
+		regulator-min-microvolt = <2800000>;
+		regulator-max-microvolt = <2800000>;
+		regulator-enable-ramp-delay = <100>;
+
+		gpio = <&pm660_gpios 13 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+	};
 };
 
 &apps_rsc {
@@ -96,6 +108,18 @@
 			regulator-max-microvolt = <1800000>;
 			regulator-enable-ramp-delay = <250>;
 		};
+
+		vreg_l1a_1p225: ldo1 {
+			regulator-min-microvolt = <1200000>;
+			regulator-max-microvolt = <1250000>;
+			regulator-enable-ramp-delay = <250>;
+		};
+
+		vreg_l8a_1p8: ldo8 {
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
+			regulator-enable-ramp-delay = <250>;
+		};
 	};
 
 	regulators-1 {
@@ -121,6 +145,12 @@
 		vreg_l4b_2p95: ldo4 {
 			regulator-min-microvolt = <2960000>;
 			regulator-max-microvolt = <2960000>;
+			regulator-enable-ramp-delay = <250>;
+		};
+
+		vreg_l6b_3p008: ldo6 {
+			regulator-min-microvolt = <3008000>;
+			regulator-max-microvolt = <3008000>;
 			regulator-enable-ramp-delay = <250>;
 		};
 
@@ -158,4 +188,164 @@
 &usb_1_dwc3 {
 	dr_mode = "peripheral";
 	maximum-speed = "high-speed";
+};
+
+&i2c9 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	synaptics-rmi4-i2c@20 {
+		compatible = "syna,rmi4-i2c";
+		reg = <0x20>;
+		interrupts-extended = <&tlmm 125 IRQ_TYPE_EDGE_FALLING>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&touchscreen_default>;
+
+		reset-gpios = <&tlmm 119 GPIO_ACTIVE_LOW>;
+		vdd-supply = <&touch_vdd_2p8>;
+		vio-supply = <&vreg_l8a_1p8>;
+
+		syna,reset-delay-ms = <200>;
+		syna,startup-delay-ms = <200>;
+
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		rmi4-f01@1 {
+			reg = <0x01>;
+			syna,nosleep-mode = <1>;
+		};
+
+		rmi4_f12: rmi4-f12@12 {
+			reg = <0x12>;
+			touchscreen-x-mm = <69>;
+			touchscreen-y-mm = <148>;
+			syna,sensor-type = <1>;
+			syna,rezero-wait-ms = <200>;
+		};
+	};
+};
+
+&mdss {
+	status = "okay";
+};
+
+&mdss_mdp {
+	status = "okay";
+};
+
+&mdss_dsi0 {
+	vdda-supply = <&vreg_l1a_1p225>;
+	status = "okay";
+
+	panel: panel@0 {
+		compatible = "samsung,ams653tk01";
+		reg = <0>;
+
+		vddio-supply = <&vreg_l8a_1p8>;
+		vdda-3p3-supply = <&vreg_l6b_3p008>;
+		lab-supply = <&panel_lab>;
+		ibb-supply = <&panel_ibb>;
+
+		te-gpios = <&tlmm 10 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&tlmm 26 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default", "sleep";
+		pinctrl-0 = <&panel_default>;
+		pinctrl-1 = <&panel_sleep>;
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&mdss_dsi0_out>;
+			};
+		};
+	};
+};
+
+&spmi_bus {
+	pmic@3 {
+		panel_labibb: lab-ibb {
+			compatible = "qcom,pm660a-lab-ibb", "qcom,pmi8998-lab-ibb";
+			status = "okay";
+
+			panel_ibb: ibb {
+				interrupts = <0x3 0xdc 0x2 IRQ_TYPE_EDGE_RISING>;
+				interrupt-names = "sc-err";
+				regulator-name = "panel-ibb";
+				regulator-min-microvolt = <4000000>;
+				regulator-max-microvolt = <6300000>;
+				qcom,discharge-resistor-kohms = <300>;
+			};
+
+			panel_lab: lab {
+				interrupts = <0x3 0xde 0x1 IRQ_TYPE_EDGE_RISING>;
+				interrupt-names = "sc-err";
+				regulator-name = "panel-lab";
+				regulator-min-microvolt = <4600000>;
+				regulator-max-microvolt = <6100000>;
+			};
+		};
+	};
+};
+
+&mdss_dsi0_out {
+	remote-endpoint = <&panel_in>;
+	data-lanes = <0 1 2 3>;
+	qcom,te-source = "mdp_vsync_p";
+};
+
+&mdss_dsi0_phy {
+	vdds-supply = <&vreg_l1b_0p925>;
+	status = "okay";
+};
+
+&tlmm {
+	panel_default: panel-default-state {
+		reset-pins {
+			pins = "gpio26";
+			function = "gpio";
+			drive-strength = <8>;
+			bias-disable;
+		};
+
+		te-pins {
+			pins = "gpio10";
+			function = "mdp_vsync";
+			drive-strength = <2>;
+			bias-disable;
+		};
+	};
+
+	panel_sleep: panel-sleep-state {
+		reset-pins {
+			pins = "gpio26";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-pull-down;
+		};
+
+		te-pins {
+			pins = "gpio10";
+			function = "mdp_vsync";
+			drive-strength = <2>;
+			bias-disable;
+		};
+	};
+
+	touchscreen_default: touchscreen-default-state {
+		reset-pins {
+			pins = "gpio119";
+			function = "gpio";
+			drive-strength = <8>;
+			bias-pull-up;
+		};
+
+		irq-pins {
+			pins = "gpio125";
+			function = "gpio";
+			drive-strength = <2>;
+			bias-disable;
+			input-enable;
+		};
+	};
 };

@@ -15,6 +15,8 @@ LINUX_COMMIT="${LINUX_COMMIT:-8d3ae59288f1e7d58d76558a6ee96d533bc5019f}"
 DTS_NAME="sdm710-realme-rmx1901.dts"
 DTB_NAME="sdm710-realme-rmx1901.dtb"
 DTS_DIR="${KERNEL_SOURCE}/arch/arm64/boot/dts/qcom"
+PANEL_SOURCE="${SCRIPT_DIR}/panel/panel-samsung-ams653tk01.c"
+KERNEL_PATCH_DIR="${SCRIPT_DIR}/patches"
 DTB_ENTRY='dtb-$(CONFIG_ARCH_QCOM) += sdm710-realme-rmx1901.dtb'
 
 if ! git -C "${KERNEL_SOURCE}" rev-parse --verify HEAD >/dev/null 2>&1; then
@@ -32,6 +34,19 @@ install -D -m 0644 "${SCRIPT_DIR}/dts/sdm710.dtsi" \
     "${DTS_DIR}/sdm710.dtsi"
 install -D -m 0644 "${SCRIPT_DIR}/dts/${DTS_NAME}" \
     "${DTS_DIR}/${DTS_NAME}"
+install -D -m 0644 "${PANEL_SOURCE}" \
+    "${KERNEL_SOURCE}/drivers/gpu/drm/panel/panel-samsung-ams653tk01.c"
+
+for KERNEL_PATCH in "${KERNEL_PATCH_DIR}"/*.patch; do
+    if git -C "${KERNEL_SOURCE}" apply --check --whitespace=nowarn "${KERNEL_PATCH}"; then
+        git -C "${KERNEL_SOURCE}" apply --whitespace=nowarn "${KERNEL_PATCH}"
+    elif git -C "${KERNEL_SOURCE}" apply --reverse --check --whitespace=nowarn "${KERNEL_PATCH}"; then
+        echo "kernel integration patch already applied: $(basename "${KERNEL_PATCH}")"
+    else
+        echo "kernel source has uncommitted changes conflicting with ${KERNEL_PATCH}" >&2
+        exit 1
+    fi
+done
 
 if ! grep -Fqx "${DTB_ENTRY}" "${DTS_DIR}/Makefile"; then
     printf '\n%s\n' "${DTB_ENTRY}" >> "${DTS_DIR}/Makefile"

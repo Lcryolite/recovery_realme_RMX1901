@@ -7,9 +7,9 @@ kernel configuration fragment, and kernel build script are under `mainline/`.
 
 ## Status
 
-The DTS compiles against Linux v7.2 and the repository image-guard tests pass.
-Recovery boot, UFS crypto, display, touch, and the complete UI remain pending
-real-device validation.
+The board DTS, the RMX1901 panel driver, and the RMI4 touch integration target
+Linux v7.2. Repository image-guard tests pass; recovery boot, UFS crypto,
+display, touch, and the complete UI still require real-device validation.
 
 ## Compile
 
@@ -52,14 +52,14 @@ To test it:
 fastboot boot /path/to/recovery.img
 ```
 
-This branch has passed static DTS compilation and repository-level image-guard
-tests. A real-device boot test is still required. Linux v7.2 does not currently
-include the RMX1901 AMOLED panel driver or the S3706 touch driver, so the board
-description initially relies on the bootloader-retained simple framebuffer and
-should be treated as a bring-up baseline. UFS crypto, display, touch, and
-recovery UI behavior remain unverified until hardware testing. Mainline v7.2
-does not provide the Android downstream MTP gadget; recovery USB requests for
-MTP therefore fall back to ADB, while configfs mass storage is enabled.
+This branch carries a small mainline-compatible AMS653TK01 DRM panel driver and
+uses the upstream RMI4 F12 stack for the S3706 controller. The kernel script
+installs those sources and applies the corresponding Linux-side integration
+patch before building. A real-device boot test is still required: the panel
+power/reset polarity, DSI timings, touch firmware compatibility, UFS crypto,
+and recovery UI behavior remain unverified until hardware testing. Mainline
+v7.2 does not provide the Android downstream MTP gadget; recovery USB requests
+for MTP therefore fall back to ADB, while configfs mass storage is enabled.
 
 ## Terminal Rescue Tools & Usage Guide
 

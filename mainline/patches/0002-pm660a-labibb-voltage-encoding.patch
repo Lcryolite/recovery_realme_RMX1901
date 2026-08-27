@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Lcryolite <lcryolite@users.noreply.github.com>
+Date: Fri, 28 Aug 2026 00:00:00 +0800
+Subject: [PATCH] regulator: support PM660A IBB voltage encoding
+
+Reuse the mainline LAB/IBB register driver for the PM660A display bias
+peripheral. PM660A encodes IBB voltage from zero rather than from the
+PMI8998 1.4 V base, so provide variant data with the correct base voltage.
+---
+ drivers/regulator/qcom-labibb-regulator.c | 17 +++++++++++++++--
+ 1 file changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/regulator/qcom-labibb-regulator.c b/drivers/regulator/qcom-labibb-regulator.c
+index 000000000000..000000000000 100644
+--- a/drivers/regulator/qcom-labibb-regulator.c
++++ b/drivers/regulator/qcom-labibb-regulator.c
+@@ -103,7 +103,8 @@ struct labibb_regulator_data {
+ 	const char			*name;
+ 	u8				type;
+ 	u16				base;
+ 	const struct regulator_desc	*desc;
++	unsigned int			min_uV;
+ };
+ 
+ static int qcom_labibb_ocp_hw_enable(struct regulator_dev *rdev)
+@@ -747,13 +748,24 @@ static const struct regulator_desc pmi8998_ibb_desc = {
+ };
+ 
+ static const struct labibb_regulator_data pmi8998_labibb_data[] = {
+-	{"lab", QCOM_LAB_TYPE, PMI8998_LAB_REG_BASE, &pmi8998_lab_desc},
+-	{"ibb", QCOM_IBB_TYPE, PMI8998_IBB_REG_BASE, &pmi8998_ibb_desc},
++	{"lab", QCOM_LAB_TYPE, PMI8998_LAB_REG_BASE, &pmi8998_lab_desc,
++	  4600000},
++	{"ibb", QCOM_IBB_TYPE, PMI8998_IBB_REG_BASE, &pmi8998_ibb_desc,
++	  1400000},
++	{ },
++};
++
++static const struct labibb_regulator_data pm660a_labibb_data[] = {
++	{"lab", QCOM_LAB_TYPE, PMI8998_LAB_REG_BASE, &pmi8998_lab_desc,
++	  4600000},
++	{"ibb", QCOM_IBB_TYPE, PMI8998_IBB_REG_BASE, &pmi8998_ibb_desc,
++	  0},
+ 	{ },
+ };
+ 
+ static const struct of_device_id qcom_labibb_match[] = {
+ 	{ .compatible = "qcom,pmi8998-lab-ibb", .data = &pmi8998_labibb_data},
++	{ .compatible = "qcom,pm660a-lab-ibb", .data = &pm660a_labibb_data},
+ 	{ },
+ };
+ MODULE_DEVICE_TABLE(of, qcom_labibb_match);
+@@ -864,6 +876,7 @@ static int qcom_labibb_regulator_probe(struct platform_device *pdev)
+ 		memcpy(&vreg->desc, reg_data->desc, sizeof(vreg->desc));
+ 		vreg->desc.of_match = reg_data->name;
+ 		vreg->desc.name = reg_data->name;
++		vreg->desc.min_uV = reg_data->min_uV;
+ 
+ 		cfg.dev = vreg->dev;
+ 		cfg.driver_data = vreg;
+
+-- 
+2.43.0

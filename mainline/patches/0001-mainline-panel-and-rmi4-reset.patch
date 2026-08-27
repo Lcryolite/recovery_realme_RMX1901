@@ -1,0 +1,97 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Lcryolite <lcryolite@users.noreply.github.com>
+Date: Fri, 28 Aug 2026 00:00:00 +0800
+Subject: [PATCH] drm/power: add RMX1901 panel, bias rails, and touch reset
+
+Add the RMX1901 panel Kconfig/Makefile entry, expose the PM660A LAB/IBB
+boost rails through the mainline common register interface, and make the
+generic RMI4 I2C transport honor the standard reset-gpios property.
+---
+ Documentation/devicetree/bindings/regulator/qcom-labibb-regulator.yaml |  1 +
+ drivers/gpu/drm/panel/Kconfig  | 10 ++++++++++
+ drivers/gpu/drm/panel/Makefile |  1 +
+ drivers/input/rmi4/rmi_i2c.c   | 17 +++++++++++++++++
+ 4 files changed, 29 insertions(+)
+
+diff --git a/drivers/gpu/drm/panel/Kconfig b/drivers/gpu/drm/panel/Kconfig
+index 000000000000..000000000000 100644
+--- a/drivers/gpu/drm/panel/Kconfig
++++ b/drivers/gpu/drm/panel/Kconfig
+@@ -1347,6 +1347,16 @@ config DRM_PANEL_XINPENG_XPP055C272
+ 	depends on BACKLIGHT_CLASS_DEVICE
+ 	help
+ 	  Say Y here if you want to enable support for the Xinpeng
+ 	  XPP055C272 controller for 720x1280 LCD panels with MIPI/RGB/SPI
+ 	  system interfaces.
++
++config DRM_PANEL_SAMSUNG_AMS653TK01
++	tristate "Samsung AMS653TK01 panel"
++	depends on OF
++	depends on DRM_MIPI_DSI
++	depends on BACKLIGHT_CLASS_DEVICE
++	depends on REGULATOR
++	help
++	  Say Y here to enable the Samsung AMS653TK01 1080x2340 command mode
++	  AMOLED panel used by the Realme X RMX1901.
+ endmenu
+diff --git a/drivers/gpu/drm/panel/Makefile b/drivers/gpu/drm/panel/Makefile
+index 000000000000..000000000000 100644
+--- a/drivers/gpu/drm/panel/Makefile
++++ b/drivers/gpu/drm/panel/Makefile
+@@ -83,5 +83,6 @@ obj-$(CONFIG_DRM_PANEL_SAMSUNG_AMS581VF01) += panel-samsung-ams581vf01.o
+ obj-$(CONFIG_DRM_PANEL_SAMSUNG_AMS581VF01) += panel-samsung-ams581vf01.o
+ obj-$(CONFIG_DRM_PANEL_SAMSUNG_AMS639RQ08) += panel-samsung-ams639rq08.o
++obj-$(CONFIG_DRM_PANEL_SAMSUNG_AMS653TK01) += panel-samsung-ams653tk01.o
+ obj-$(CONFIG_DRM_PANEL_SAMSUNG_ATNA33XC20) += panel-samsung-atna33xc20.o
+ obj-$(CONFIG_DRM_PANEL_SAMSUNG_DB7430) += panel-samsung-db7430.o
+ obj-$(CONFIG_DRM_PANEL_SAMSUNG_LD9040) += panel-samsung-ld9040.o
+diff --git a/drivers/input/rmi4/rmi_i2c.c b/drivers/input/rmi4/rmi_i2c.c
+index 000000000000..000000000000 100644
+--- a/drivers/input/rmi4/rmi_i2c.c
++++ b/drivers/input/rmi4/rmi_i2c.c
+@@ -7,4 +7,5 @@
+ #include <linux/i2c.h>
++#include <linux/gpio/consumer.h>
+ #include <linux/rmi.h>
+ #include <linux/of.h>
+ #include <linux/delay.h>
+@@ -41,3 +41,4 @@ struct rmi_i2c_xport {
+ 	struct regulator_bulk_data supplies[2];
+ 	u32 startup_delay;
++	struct gpio_desc *reset_gpio;
+ };
+@@ -251,6 +252,21 @@ static int rmi_i2c_probe(struct i2c_client *client)
+ 
+ 	msleep(rmi_i2c->startup_delay);
+ 
++	rmi_i2c->reset_gpio = devm_gpiod_get_optional(&client->dev, "reset",
++						       GPIOD_OUT_LOW);
++	if (IS_ERR(rmi_i2c->reset_gpio))
++		return PTR_ERR(rmi_i2c->reset_gpio);
++
++	if (rmi_i2c->reset_gpio) {
++		/* The binding describes an active-low hardware reset. */
++		gpiod_set_value_cansleep(rmi_i2c->reset_gpio, 0);
++		usleep_range(5000, 6000);
++		gpiod_set_value_cansleep(rmi_i2c->reset_gpio, 1);
++		usleep_range(10000, 11000);
++		gpiod_set_value_cansleep(rmi_i2c->reset_gpio, 0);
++		msleep(rmi_i2c->startup_delay ?: 20);
++	}
++
+ 	rmi_i2c->client = client;
+ 	mutex_init(&rmi_i2c->page_mutex);
+ 
+diff --git a/Documentation/devicetree/bindings/regulator/qcom-labibb-regulator.yaml b/Documentation/devicetree/bindings/regulator/qcom-labibb-regulator.yaml
+index 000000000000..000000000000 100644
+--- a/Documentation/devicetree/bindings/regulator/qcom-labibb-regulator.yaml
++++ b/Documentation/devicetree/bindings/regulator/qcom-labibb-regulator.yaml
+@@ -18,4 +18,5 @@ properties:
+       - items:
+           - enum:
+               - qcom,pmi8950-lab-ibb
++              - qcom,pm660a-lab-ibb
+           - const: qcom,pmi8998-lab-ibb
+
+-- 
+2.43.0
