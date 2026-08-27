@@ -14,14 +14,21 @@ class WorkflowConfigTest(unittest.TestCase):
             contents,
             r"(?m)^\s*CCACHE_EXEC:\s*/usr/bin/ccache\s*$",
         )
+        self.assertIn(
+            "CCACHE_DIR: ${{ runner.temp }}/rmx1901-ccache",
+            contents,
+        )
         self.assertRegex(contents, r"(?m)^\s*USE_CCACHE:\s*1\s*$")
 
     def test_restored_ccache_is_copied_into_a_writable_directory(self):
         contents = WORKFLOW.read_text()
 
-        self.assertIn("path: .ccache-restore", contents)
         self.assertIn(
-            'cp -R --no-preserve=mode,ownership,timestamps .ccache-restore/. "${CCACHE_DIR}/"',
+            "path: ${{ runner.temp }}/rmx1901-ccache-restore",
+            contents,
+        )
+        self.assertIn(
+            'cp -R --no-preserve=mode,ownership,timestamps "${RESTORED_CCACHE_DIR}/." "${CCACHE_DIR}/"',
             contents,
         )
         self.assertIn('chmod -R u+rwX "${CCACHE_DIR}"', contents)
