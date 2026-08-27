@@ -11,6 +11,7 @@ jobs:
       ORANGEFOX_BUILD_ENV_SHA: 265b1a256e061d9f3ca6e6767c6aa2bce4d9cb1a
       ORANGEFOX_SYNC_SHA: 14eca5f7ef82c9dacfe353db8b93329383c7293f
       CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_EXEC: /usr/bin/ccache
       CCACHE_BASEDIR: ${{ github.workspace }}
       USE_CCACHE: 1
 
