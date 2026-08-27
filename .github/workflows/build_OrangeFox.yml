@@ -82,8 +82,9 @@ jobs:
     - name: Checkout Linux v7.2
       timeout-minutes: 20
       run: |
-        git clone --filter=blob:none --no-checkout "${LINUX_REPO}" linux
-        git -C linux fetch --depth=1 origin "${LINUX_COMMIT}"
+        git init --quiet linux
+        git -C linux remote add origin "${LINUX_REPO}"
+        git -C linux fetch --filter=blob:none --no-tags --depth=1 origin "${LINUX_COMMIT}"
         git -C linux checkout --detach "${LINUX_COMMIT}"
         test "$(git -C linux rev-parse HEAD)" = "${LINUX_COMMIT}"
 
