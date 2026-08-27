@@ -46,7 +46,7 @@ make -C "${KERNEL_SOURCE}" O="${KERNEL_OUTPUT}" ARCH=arm64 \
     CROSS_COMPILE="${CROSS_COMPILE}" olddefconfig
 make -C "${KERNEL_SOURCE}" O="${KERNEL_OUTPUT}" ARCH=arm64 \
     CROSS_COMPILE="${CROSS_COMPILE}" -j"${JOBS}" \
-    Image.gz "arch/arm64/boot/dts/qcom/${DTB_NAME}"
+    Image.gz "qcom/${DTB_NAME}"
 
 mkdir -p "${PROJECT_ROOT}/prebuilt"
 cat "${KERNEL_OUTPUT}/arch/arm64/boot/Image.gz" \
