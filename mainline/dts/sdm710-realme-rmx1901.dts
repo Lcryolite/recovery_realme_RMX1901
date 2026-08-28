@@ -14,10 +14,21 @@
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/interrupt-controller/irq.h>
 
+/delete-node/ &venus_mem;
+/delete-node/ &wlan_msa_mem;
+/delete-node/ &cdsp_mem;
+/delete-node/ &mba_region;
+/delete-node/ &adsp_mem;
+/delete-node/ &ipa_fw_mem;
+/delete-node/ &ipa_gsi_mem;
+/delete-node/ &spss_mem;
+/delete-node/ &gpu_mem;
+
 / {
 	model = "Realme X";
 	compatible = "realme,rmx1901", "qcom,sdm710", "qcom,sdm670";
 	qcom,msm-id = <360 0x0>, <393 0x0>;
+	qcom,board-id = <0 0>;
 
 	chosen {
 		bootargs = "regulator_ignore_unused pd_ignore_unused";
@@ -38,8 +49,43 @@
 	};
 
 	reserved-memory {
+		/* The vendor removed region fills the gap before the camera carveout. */
+		vendor-firmware@88f00000 {
+			reg = <0 0x88f00000 0 0x1c00000>;
+			no-map;
+		};
+
 		framebuffer@9c000000 {
 			reg = <0 0x9c000000 0 0x2300000>;
+			no-map;
+		};
+
+		gpu_mem: gpu@98a15000 {
+			reg = <0 0x98a15000 0 0x2000>;
+			no-map;
+		};
+
+		dfps-data@9e300000 {
+			reg = <0 0x9e300000 0 0x100000>;
+			no-map;
+		};
+
+		secure-dsp@a7800000 {
+			reg = <0 0xa7800000 0 0xc00000>;
+			no-map;
+		};
+
+		ramoops@b7e00000 {
+			compatible = "ramoops";
+			reg = <0 0xb7e00000 0 0x400000>;
+			record-size = <0x40000>;
+			console-size = <0x40000>;
+			pmsg-size = <0x200000>;
+			ftrace-size = <0x40000>;
+		};
+
+		kboot-log@b8200000 {
+			reg = <0 0xb8200000 0 0x100000>;
 			no-map;
 		};
 	};
@@ -69,9 +115,14 @@
 		regulator-max-microvolt = <2800000>;
 		regulator-enable-ramp-delay = <100>;
 
-		gpio = <&pm660_gpios 13 GPIO_ACTIVE_HIGH>;
+		gpio = <&pm660_gpios 12 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
 	};
+};
+
+/* Coalesce the vendor's overlapping modem/video/DSP carveouts for memblock. */
+&mpss_region {
+	reg = <0 0x8b000000 0 0xda15000>;
 };
 
 &apps_rsc {

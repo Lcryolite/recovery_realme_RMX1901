@@ -83,6 +83,10 @@ jobs:
       with:
         path: fox_12.1/device/realme/RMX1901
 
+    - name: Run device tree checks
+      timeout-minutes: 5
+      run: python3 -m unittest discover -s fox_12.1/device/realme/RMX1901/tests -q
+
     - name: Restore ccache
       id: ccache_restore
       uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
