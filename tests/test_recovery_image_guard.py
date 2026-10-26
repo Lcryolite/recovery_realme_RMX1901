@@ -1,5 +1,6 @@
 import gzip
 import importlib.util
+import lzma
 import struct
 import tempfile
 import unittest
@@ -26,8 +27,12 @@ GZIP_INITRD_CONFIG = (
 LEGACY_LZ4_RAMDISK = bytes.fromhex("02214c18080000007072616d6469736b")
 
 
-def fake_kernel(config: bytes | None = None) -> bytes:
-    image = b"kernel"
+def fake_kernel(config: bytes | None = None, image_size: int = 0x31BA000) -> bytes:
+    header = bytearray(64)
+    struct.pack_into("<Q", header, 8, 0x80000)
+    struct.pack_into("<Q", header, 16, image_size)
+    header[56:60] = b"ARMd"
+    image = bytes(header) + b"kernel"
     if config is not None:
         image += b"IKCFG_ST" + gzip.compress(config, mtime=0) + b"IKCFG_ED"
     return gzip.compress(image, mtime=0) + fake_dtb(b"one") + fake_dtb(b"two")
@@ -63,7 +68,7 @@ class RecoveryImageGuardTest(unittest.TestCase):
         kernel = fake_kernel()
         gzip_image, dtb_group = guard.split_kernel_dtb(kernel)
 
-        self.assertEqual(gzip.decompress(gzip_image), b"kernel")
+        self.assertEqual(gzip.decompress(gzip_image)[64:], b"kernel")
         self.assertEqual(guard.validate_dtb_group(dtb_group), [43, 43])
 
     def test_rejects_kernel_without_dtb(self):
@@ -132,6 +137,58 @@ class RecoveryImageGuardTest(unittest.TestCase):
                     ):
                         guard.validate_recovery_image(
                             image_path, kernel_path, dtbo_path, 16384
+                        )
+
+    def test_lzma_ramdisk_requires_kernel_support(self):
+        ramdisk = lzma.compress(b"ramdisk", format=lzma.FORMAT_ALONE, preset=6)
+        for supported in (False, True):
+            config = GZIP_INITRD_CONFIG
+            if supported:
+                config += b"CONFIG_RD_LZMA=y\nCONFIG_DECOMPRESS_LZMA=y\n"
+            kernel = fake_kernel(config)
+            with self.subTest(supported=supported), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "kernel").write_bytes(kernel)
+                (root / "dtbo").write_bytes(b"dtbo")
+                (root / "recovery.img").write_bytes(
+                    fake_recovery_image(kernel, b"dtbo", 16384, ramdisk)
+                )
+                if supported:
+                    guard.validate_recovery_image(
+                        root / "recovery.img", root / "kernel", root / "dtbo", 16384
+                    )
+                else:
+                    with self.assertRaisesRegex(
+                        guard.ValidationError, "lzma.*CONFIG_RD_LZMA"
+                    ):
+                        guard.validate_recovery_image(
+                            root / "recovery.img", root / "kernel", root / "dtbo", 16384
+                        )
+
+    def test_runtime_kernel_must_fit_abl_workspace(self):
+        # The failed image's compressed ramdisk leaves exactly 0x370d000 bytes.
+        ramdisk = gzip.compress(b"ramdisk", mtime=0).ljust(29821896, b"\0")
+        partition_size = 32 * 1024 * 1024
+        for image_size in (0x370D000, 0x3940000):
+            kernel = fake_kernel(GZIP_INITRD_CONFIG, image_size=image_size)
+            with self.subTest(image_size=image_size), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "kernel").write_bytes(kernel)
+                (root / "dtbo").write_bytes(b"dtbo")
+                (root / "recovery.img").write_bytes(
+                    fake_recovery_image(kernel, b"dtbo", partition_size, ramdisk)
+                )
+                if image_size == 0x370D000:
+                    guard.validate_recovery_image(
+                        root / "recovery.img", root / "kernel", root / "dtbo", partition_size
+                    )
+                else:
+                    with self.assertRaisesRegex(
+                        guard.ValidationError,
+                        "kernel runtime size 60030976 exceeds ABL workspace 57724928",
+                    ):
+                        guard.validate_recovery_image(
+                            root / "recovery.img", root / "kernel", root / "dtbo", partition_size
                         )
 
 

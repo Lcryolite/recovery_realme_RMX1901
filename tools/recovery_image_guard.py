@@ -15,6 +15,10 @@ FDT_MAGIC = b"\xd0\r\xfe\xed"
 BOOT_MAGIC = b"ANDROID!"
 AVB_FOOTER_MAGIC = b"AVBf"
 BOOT_HEADER_V1_SIZE = 1648
+# Observed RMX1901 C.02 ABL fallback layout, including its two page guards.
+ABL_KERNEL_WINDOW_SIZE = 0x05600000
+ABL_KERNEL_LOAD_OFFSET = 0x00080000
+ABL_DTB_RESERVE = 0x00200000
 
 
 class ValidationError(ValueError):
@@ -94,16 +98,17 @@ def u64(image: bytes, offset: int) -> int:
     return struct.unpack_from("<Q", image, offset)[0]
 
 
-def validate_ramdisk_support(kernel: bytes, ramdisk: bytes) -> str:
+def validate_ramdisk_support(raw_kernel: bytes, ramdisk: bytes) -> str:
     if ramdisk.startswith(b"\x1f\x8b"):
         compression = "gzip"
     elif ramdisk.startswith(b"\x02\x21\x4c\x18"):
         compression = "lz4"
+    elif ramdisk.startswith(b"\x5d\x00"):
+        compression = "lzma"
     else:
         raise ValidationError("unsupported Recovery ramdisk compression")
 
     try:
-        raw_kernel = zlib.decompress(kernel, 31)
         marker = b"IKCFG_ST\x1f\x8b\x08"
         offset = raw_kernel.find(marker)
         if offset < 0:
@@ -128,6 +133,32 @@ def validate_ramdisk_support(kernel: bytes, ramdisk: bytes) -> str:
             f"{compression} ramdisk requires {', '.join(missing)} in kernel configuration"
         )
     return compression
+
+
+def validate_abl_workspace(
+    raw_kernel: bytes, kernel_size: int, ramdisk_size: int, page_size: int
+) -> tuple[int, int]:
+    if page_size != 4096:
+        raise ValidationError("the verified RMX1901 ABL layout requires 4096-byte pages")
+    if len(raw_kernel) < 64 or raw_kernel[56:60] != b"ARMd":
+        raise ValidationError("kernel has no ARM64 Image header")
+    runtime_size = u64(raw_kernel, 16)
+    if runtime_size == 0:
+        raise ValidationError("ARM64 kernel runtime size is unavailable")
+    workspace = (
+        ABL_KERNEL_WINDOW_SIZE
+        - ABL_KERNEL_LOAD_OFFSET
+        - align(ramdisk_size, page_size)
+        - ABL_DTB_RESERVE
+        - 2 * page_size
+    )
+    if kernel_size >= workspace or len(raw_kernel) > workspace:
+        raise ValidationError("compressed or inflated kernel does not fit ABL workspace")
+    if runtime_size > workspace:
+        raise ValidationError(
+            f"kernel runtime size {runtime_size} exceeds ABL workspace {workspace}"
+        )
+    return runtime_size, workspace
 
 
 def validate_recovery_image(
@@ -182,12 +213,21 @@ def validate_recovery_image(
     if image[-64:-60] != AVB_FOOTER_MAGIC:
         raise ValidationError("recovery image has no AVB footer")
 
+    try:
+        raw_kernel = zlib.decompress(kernel, 31)
+    except zlib.error as error:
+        raise ValidationError(f"kernel gzip stream is invalid: {error}") from error
     compression = validate_ramdisk_support(
-        kernel, image[ramdisk_offset : ramdisk_offset + ramdisk_size]
+        raw_kernel, image[ramdisk_offset : ramdisk_offset + ramdisk_size]
+    )
+    runtime_size, workspace = validate_abl_workspace(
+        raw_kernel, kernel_size, ramdisk_size, page_size
     )
     print(
         f"recovery image OK: sha256={sha256(image)} kernel={kernel_size} "
-        f"ramdisk={ramdisk_size} ramdisk_format={compression} dtbo={recovery_dtbo_size}"
+        f"ramdisk={ramdisk_size} ramdisk_format={compression} dtbo={recovery_dtbo_size} "
+        f"kernel_runtime={runtime_size} abl_workspace={workspace} "
+        f"abl_headroom={workspace - runtime_size}"
     )
 
 

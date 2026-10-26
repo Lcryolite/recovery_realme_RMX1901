@@ -105,8 +105,9 @@ TARGET_NO_RECOVERY := false
 
 # Recovery Compression
 TARGET_USES_MKE2FS := true
-# The pinned release kernel supports gzip initramfs, not LZ4.
+# LZMA fits the verified ABL workspace; the pinned kernel has no LZ4 support.
 BOARD_RAMDISK_USE_LZ4 := false
+BOARD_RAMDISK_USE_LZMA := true
 
 # Crypto
 TW_INCLUDE_CRYPTO := true

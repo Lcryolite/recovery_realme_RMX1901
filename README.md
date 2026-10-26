@@ -32,9 +32,15 @@ The recovery build pins the released `stock-next` BakaSU kernel payload from
 with BakaSU commit `39faf94a2d4a40d48093398bafcde649916edbc1`.
 The checked-in `prebuilt/Image.gz-dtb` combines that payload with the existing
 Recovery DTB group; the independent Recovery DTBO is preserved.
-Recovery uses a gzip ramdisk because this kernel enables `CONFIG_RD_GZIP`
-but not `CONFIG_RD_LZ4`. The image guard checks ramdisk compression against
-the kernel's embedded IKCONFIG before accepting a built image.
+Recovery uses an LZMA-Alone ramdisk, enabled by `BOARD_RAMDISK_USE_LZMA`
+and `OF_USE_LZMA_COMPRESSION`. The kernel supports LZMA, but not LZ4 or XZ.
+This also fits the loader workspace observed on RMX1901EX_11.C.02:
+`0x05600000 - 0x00080000 - ALIGN(ramdisk_size, 4096) - 0x00200000 - 8192`.
+The gzip candidate left 57,724,928 bytes for a kernel whose ARM64 header
+requires 60,030,976 bytes, exceeding this ABL limit.
+The image guard checks the embedded IKCONFIG, ARM64 runtime size, and this
+firmware-specific workspace before accepting a built image. Other bootloader
+layouts remain `unverified`.
 Keep the prebuilt payload and `RECOVERY_KERNEL_SHA256` pin in sync rather than
 downloading from a moving kernel branch during CI.
 Validate the complete image and its AVB metadata before device testing.
