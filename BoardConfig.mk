@@ -105,7 +105,8 @@ TARGET_NO_RECOVERY := false
 
 # Recovery Compression
 TARGET_USES_MKE2FS := true
-BOARD_RAMDISK_USE_LZ4 := true
+# The pinned release kernel supports gzip initramfs, not LZ4.
+BOARD_RAMDISK_USE_LZ4 := false
 
 # Crypto
 TW_INCLUDE_CRYPTO := true

@@ -94,6 +94,42 @@ def u64(image: bytes, offset: int) -> int:
     return struct.unpack_from("<Q", image, offset)[0]
 
 
+def validate_ramdisk_support(kernel: bytes, ramdisk: bytes) -> str:
+    if ramdisk.startswith(b"\x1f\x8b"):
+        compression = "gzip"
+    elif ramdisk.startswith(b"\x02\x21\x4c\x18"):
+        compression = "lz4"
+    else:
+        raise ValidationError("unsupported Recovery ramdisk compression")
+
+    try:
+        raw_kernel = zlib.decompress(kernel, 31)
+        marker = b"IKCFG_ST\x1f\x8b\x08"
+        offset = raw_kernel.find(marker)
+        if offset < 0:
+            raise ValidationError("kernel has no embedded IKCONFIG for ramdisk validation")
+        reader = zlib.decompressobj(31)
+        config = reader.decompress(raw_kernel[offset + 8 :]) + reader.flush()
+    except zlib.error as error:
+        raise ValidationError(f"invalid embedded kernel configuration: {error}") from error
+
+    if not reader.eof or not reader.unused_data.startswith(b"IKCFG_ED"):
+        raise ValidationError("embedded kernel configuration is truncated or invalid")
+    enabled = set(config.splitlines())
+    suffix = compression.upper().encode()
+    required = [
+        b"CONFIG_BLK_DEV_INITRD",
+        b"CONFIG_RD_" + suffix,
+        b"CONFIG_DECOMPRESS_" + suffix,
+    ]
+    missing = [option.decode() for option in required if option + b"=y" not in enabled]
+    if missing:
+        raise ValidationError(
+            f"{compression} ramdisk requires {', '.join(missing)} in kernel configuration"
+        )
+    return compression
+
+
 def validate_recovery_image(
     path: Path, kernel_path: Path, dtbo_path: Path, partition_size: int
 ) -> None:
@@ -146,9 +182,12 @@ def validate_recovery_image(
     if image[-64:-60] != AVB_FOOTER_MAGIC:
         raise ValidationError("recovery image has no AVB footer")
 
+    compression = validate_ramdisk_support(
+        kernel, image[ramdisk_offset : ramdisk_offset + ramdisk_size]
+    )
     print(
         f"recovery image OK: sha256={sha256(image)} kernel={kernel_size} "
-        f"ramdisk={ramdisk_size} dtbo={recovery_dtbo_size}"
+        f"ramdisk={ramdisk_size} ramdisk_format={compression} dtbo={recovery_dtbo_size}"
     )
 
 

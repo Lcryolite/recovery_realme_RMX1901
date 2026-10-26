@@ -32,6 +32,9 @@ The recovery build pins the released `stock-next` BakaSU kernel payload from
 with BakaSU commit `39faf94a2d4a40d48093398bafcde649916edbc1`.
 The checked-in `prebuilt/Image.gz-dtb` combines that payload with the existing
 Recovery DTB group; the independent Recovery DTBO is preserved.
+Recovery uses a gzip ramdisk because this kernel enables `CONFIG_RD_GZIP`
+but not `CONFIG_RD_LZ4`. The image guard checks ramdisk compression against
+the kernel's embedded IKCONFIG before accepting a built image.
 Keep the prebuilt payload and `RECOVERY_KERNEL_SHA256` pin in sync rather than
 downloading from a moving kernel branch during CI.
 Validate the complete image and its AVB metadata before device testing.

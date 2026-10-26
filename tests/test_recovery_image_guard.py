@@ -18,13 +18,27 @@ def fake_dtb(payload: bytes = b"test") -> bytes:
     return guard.FDT_MAGIC + struct.pack(">I", total_size) + bytes(32) + payload
 
 
-def fake_kernel() -> bytes:
-    return gzip.compress(b"kernel", mtime=0) + fake_dtb(b"one") + fake_dtb(b"two")
+GZIP_INITRD_CONFIG = (
+    b"CONFIG_BLK_DEV_INITRD=y\n"
+    b"CONFIG_RD_GZIP=y\n"
+    b"CONFIG_DECOMPRESS_GZIP=y\n"
+)
+LEGACY_LZ4_RAMDISK = bytes.fromhex("02214c18080000007072616d6469736b")
 
 
-def fake_recovery_image(kernel: bytes, dtbo: bytes, partition_size: int) -> bytes:
+def fake_kernel(config: bytes | None = None) -> bytes:
+    image = b"kernel"
+    if config is not None:
+        image += b"IKCFG_ST" + gzip.compress(config, mtime=0) + b"IKCFG_ED"
+    return gzip.compress(image, mtime=0) + fake_dtb(b"one") + fake_dtb(b"two")
+
+
+def fake_recovery_image(
+    kernel: bytes, dtbo: bytes, partition_size: int, ramdisk: bytes | None = None
+) -> bytes:
     page_size = 4096
-    ramdisk = b"ramdisk"
+    if ramdisk is None:
+        ramdisk = gzip.compress(b"ramdisk", mtime=0)
     kernel_offset = page_size
     ramdisk_offset = guard.align(kernel_offset + len(kernel), page_size)
     dtbo_offset = guard.align(ramdisk_offset + len(ramdisk), page_size)
@@ -61,7 +75,7 @@ class RecoveryImageGuardTest(unittest.TestCase):
             guard.validate_dtb_group(fake_dtb()[:-1])
 
     def test_recovery_must_embed_pinned_payloads(self):
-        kernel = fake_kernel()
+        kernel = fake_kernel(GZIP_INITRD_CONFIG)
         dtbo = b"dtbo"
         partition_size = 16384
         image = fake_recovery_image(kernel, dtbo, partition_size)
@@ -86,6 +100,39 @@ class RecoveryImageGuardTest(unittest.TestCase):
                 guard.validate_recovery_image(
                     image_path, kernel_path, dtbo_path, partition_size
                 )
+
+    def test_ramdisk_compression_must_match_kernel(self):
+        for lz4_supported in (False, True):
+            config = GZIP_INITRD_CONFIG
+            if lz4_supported:
+                config += b"CONFIG_RD_LZ4=y\nCONFIG_DECOMPRESS_LZ4=y\n"
+            kernel = fake_kernel(config)
+            dtbo = b"dtbo"
+            image = fake_recovery_image(
+                kernel, dtbo, 16384, ramdisk=LEGACY_LZ4_RAMDISK
+            )
+            with (
+                self.subTest(lz4_supported=lz4_supported),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                image_path = root / "recovery.img"
+                kernel_path = root / "Image.gz-dtb"
+                dtbo_path = root / "dtbo.img"
+                image_path.write_bytes(image)
+                kernel_path.write_bytes(kernel)
+                dtbo_path.write_bytes(dtbo)
+                if lz4_supported:
+                    guard.validate_recovery_image(
+                        image_path, kernel_path, dtbo_path, 16384
+                    )
+                else:
+                    with self.assertRaisesRegex(
+                        guard.ValidationError, "lz4.*CONFIG_RD_LZ4"
+                    ):
+                        guard.validate_recovery_image(
+                            image_path, kernel_path, dtbo_path, 16384
+                        )
 
 
 if __name__ == "__main__":
