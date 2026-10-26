@@ -27,14 +27,16 @@ lunch twrp_RMX1901-eng
 mka recoveryimage
 ```
 
-The recovery build intentionally uses the checked-in `stock-next` ReSukiSU
-`prebuilt/Image.gz-dtb`, built from `kernel_realme_sdm710` commit
-`0e62fd551cff83cd864a124a488d394c642ebdc3` with ReSukiSU commit
-`faccf4c5edc7be37776216e7d43dd3dca0239331`. Do not replace it from a moving
-kernel branch during CI: that makes the same recovery commit produce different,
-untested images.
-When updating the kernel, boot-test the complete recovery image and update the
-`RECOVERY_KERNEL_SHA256` value in the OrangeFox workflow at the same time.
+The recovery build pins the released `stock-next` BakaSU kernel payload from
+`kernel_realme_sdm710` commit `660c54270c9ddff443a652fb224dd249f27b8b8b`
+with BakaSU commit `39faf94a2d4a40d48093398bafcde649916edbc1`.
+The checked-in `prebuilt/Image.gz-dtb` combines that payload with the existing
+Recovery DTB group; the independent Recovery DTBO is preserved.
+Keep the prebuilt payload and `RECOVERY_KERNEL_SHA256` pin in sync rather than
+downloading from a moving kernel branch during CI.
+Validate the complete image and its AVB metadata before device testing.
+A new kernel/DTB combination remains `unverified` until the complete recovery
+image boots into an interactive interface with working touch.
 
 To test it:
 
