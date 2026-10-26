@@ -41,6 +41,10 @@ requires 60,030,976 bytes, exceeding this ABL limit.
 The image guard checks the embedded IKCONFIG, ARM64 runtime size, and this
 firmware-specific workspace before accepting a built image. Other bootloader
 layouts remain `unverified`.
+The complete-image check also requires an executable ELF `toybox` and its
+`printf`/`dmesg` applet symlinks. Do not overlay a standalone `printf` file:
+copying through the existing applet symlink can overwrite `toybox` and cause
+recursive process creation. Legacy LZ4 image inspection uses the host `lz4` tool.
 Keep the prebuilt payload and `RECOVERY_KERNEL_SHA256` pin in sync rather than
 downloading from a moving kernel branch during CI.
 Validate the complete image and its AVB metadata before device testing.

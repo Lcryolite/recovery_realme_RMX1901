@@ -4,8 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
+import lzma
+import stat
 import struct
+import subprocess
 import sys
 import zlib
 from pathlib import Path
@@ -135,6 +139,94 @@ def validate_ramdisk_support(raw_kernel: bytes, ramdisk: bytes) -> str:
     return compression
 
 
+def decompress_ramdisk(ramdisk: bytes, compression: str) -> bytes:
+    try:
+        if compression == "gzip":
+            return gzip.decompress(ramdisk)
+        if compression == "lzma":
+            return lzma.decompress(ramdisk, format=lzma.FORMAT_ALONE)
+        result = subprocess.run(
+            ["lz4", "-d", "-c"],
+            input=ramdisk,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except (OSError, EOFError, lzma.LZMAError) as error:
+        raise ValidationError(
+            f"invalid {compression} Recovery ramdisk: {error}"
+        ) from error
+    if result.returncode:
+        detail = result.stderr.decode(errors="replace").strip()
+        raise ValidationError(f"invalid lz4 Recovery ramdisk: {detail}")
+    return result.stdout
+
+
+def validate_ramdisk_applets(cpio: bytes) -> None:
+    required: dict[bytes, tuple[int, bytes] | None] = {
+        b"system/bin/toybox": None,
+        b"system/bin/printf": None,
+        b"system/bin/dmesg": None,
+    }
+    offset = 0
+
+    while True:
+        if len(cpio) - offset < 110:
+            raise ValidationError("Recovery ramdisk has a truncated newc header")
+        header = cpio[offset : offset + 110]
+        if header[:6] not in (b"070701", b"070702"):
+            raise ValidationError(f"invalid newc magic at offset {offset}")
+        try:
+            fields = [
+                int(header[index : index + 8], 16)
+                for index in range(6, 110, 8)
+            ]
+        except ValueError as error:
+            raise ValidationError(f"invalid newc header at offset {offset}") from error
+        mode = fields[1]
+        file_size = fields[6]
+        name_size = fields[11]
+        if name_size < 1:
+            raise ValidationError(f"invalid newc name size at offset {offset}")
+
+        name_start = offset + 110
+        name_end = name_start + name_size
+        if name_end > len(cpio) or cpio[name_end - 1] != 0:
+            raise ValidationError(f"truncated newc name at offset {offset}")
+        name = cpio[name_start : name_end - 1]
+        data_start = align(name_end, 4)
+        data_end = data_start + file_size
+        if data_end > len(cpio):
+            raise ValidationError(f"truncated newc data for {name!r}")
+        data = cpio[data_start:data_end]
+
+        if name in required:
+            if required[name] is not None:
+                raise ValidationError(f"duplicate newc record for {name.decode()}")
+            required[name] = (mode, data)
+        if name == b"TRAILER!!!":
+            if any(cpio[align(data_end, 4) :]):
+                raise ValidationError("Recovery ramdisk has data after the newc trailer")
+            break
+        offset = align(data_end, 4)
+
+    missing = [name.decode() for name, record in required.items() if record is None]
+    if missing:
+        raise ValidationError(f"Recovery ramdisk is missing {', '.join(missing)}")
+
+    toybox_mode, toybox = required[b"system/bin/toybox"]
+    if (
+        stat.S_IFMT(toybox_mode) != stat.S_IFREG
+        or not toybox_mode & 0o111
+        or not toybox.startswith(b"\x7fELF")
+    ):
+        raise ValidationError("system/bin/toybox must be a regular executable ELF")
+    for name in (b"system/bin/printf", b"system/bin/dmesg"):
+        mode, target = required[name]
+        if stat.S_IFMT(mode) != stat.S_IFLNK or target != b"toybox":
+            raise ValidationError(f"{name.decode()} must be a symlink to toybox")
+
+
 def validate_abl_workspace(
     raw_kernel: bytes, kernel_size: int, ramdisk_size: int, page_size: int
 ) -> tuple[int, int]:
@@ -220,6 +312,8 @@ def validate_recovery_image(
     compression = validate_ramdisk_support(
         raw_kernel, image[ramdisk_offset : ramdisk_offset + ramdisk_size]
     )
+    ramdisk = image[ramdisk_offset : ramdisk_offset + ramdisk_size]
+    validate_ramdisk_applets(decompress_ramdisk(ramdisk, compression))
     runtime_size, workspace = validate_abl_workspace(
         raw_kernel, kernel_size, ramdisk_size, page_size
     )

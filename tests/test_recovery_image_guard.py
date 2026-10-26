@@ -2,6 +2,7 @@ import gzip
 import importlib.util
 import lzma
 import struct
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -24,7 +25,59 @@ GZIP_INITRD_CONFIG = (
     b"CONFIG_RD_GZIP=y\n"
     b"CONFIG_DECOMPRESS_GZIP=y\n"
 )
-LEGACY_LZ4_RAMDISK = bytes.fromhex("02214c18080000007072616d6469736b")
+
+
+def newc_entry(name: str, data: bytes, mode: int, ino: int) -> bytes:
+    name_bytes = name.encode() + b"\0"
+    header = b"070701" + b"".join(
+        f"{value:08x}".encode()
+        for value in (
+            ino,
+            mode,
+            0,
+            0,
+            1,
+            0,
+            len(data),
+            0,
+            0,
+            0,
+            0,
+            len(name_bytes),
+            0,
+        )
+    )
+    record = header + name_bytes
+    record += bytes(-len(record) % 4)
+    record += data
+    return record + bytes(-len(record) % 4)
+
+
+def fake_cpio(
+    toybox: bytes,
+    *,
+    printf_target: bytes = b"toybox",
+    dmesg_target: bytes = b"toybox",
+    extra_entries: tuple[bytes, ...] = (),
+) -> bytes:
+    return b"".join(
+        (
+            newc_entry("system/bin/toybox", toybox, 0o100755, 1),
+            newc_entry("system/bin/printf", printf_target, 0o120777, 2),
+            newc_entry("system/bin/dmesg", dmesg_target, 0o120777, 3),
+            *extra_entries,
+            newc_entry("TRAILER!!!", b"", 0, 4),
+        )
+    )
+
+
+def legacy_lz4(data: bytes) -> bytes:
+    return subprocess.run(
+        ["/usr/bin/lz4", "-l", "-c"],
+        input=data,
+        stdout=subprocess.PIPE,
+        check=True,
+    ).stdout
 
 
 def fake_kernel(config: bytes | None = None, image_size: int = 0x31BA000) -> bytes:
@@ -43,7 +96,7 @@ def fake_recovery_image(
 ) -> bytes:
     page_size = 4096
     if ramdisk is None:
-        ramdisk = gzip.compress(b"ramdisk", mtime=0)
+        ramdisk = gzip.compress(fake_cpio(b"\x7fELF" + bytes(60)), mtime=0)
     kernel_offset = page_size
     ramdisk_offset = guard.align(kernel_offset + len(kernel), page_size)
     dtbo_offset = guard.align(ramdisk_offset + len(ramdisk), page_size)
@@ -106,7 +159,99 @@ class RecoveryImageGuardTest(unittest.TestCase):
                     image_path, kernel_path, dtbo_path, partition_size
                 )
 
+    def test_recovery_rejects_toybox_overwritten_through_applet_symlink(self):
+        kernel = fake_kernel(GZIP_INITRD_CONFIG)
+        dtbo = b"dtbo"
+        wrapper = (
+            b"#!/system/bin/sh\n"
+            b"# Atomic single-write printf wrapper for Recovery environment\n"
+        )
+        ramdisk = gzip.compress(fake_cpio(wrapper), mtime=0)
+        partition_size = 16384
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "kernel").write_bytes(kernel)
+            (root / "dtbo").write_bytes(dtbo)
+            (root / "recovery.img").write_bytes(
+                fake_recovery_image(kernel, dtbo, partition_size, ramdisk)
+            )
+
+            with self.assertRaisesRegex(
+                guard.ValidationError, "system/bin/toybox.*regular executable ELF"
+            ):
+                guard.validate_recovery_image(
+                    root / "recovery.img",
+                    root / "kernel",
+                    root / "dtbo",
+                    partition_size,
+                )
+
+    def test_recovery_rejects_duplicate_critical_ramdisk_path(self):
+        kernel = fake_kernel(GZIP_INITRD_CONFIG)
+        dtbo = b"dtbo"
+        duplicate = newc_entry(
+            "system/bin/toybox", b"#!/system/bin/sh\n", 0o100755, 4
+        )
+        ramdisk = gzip.compress(
+            fake_cpio(b"\x7fELF" + bytes(60), extra_entries=(duplicate,)),
+            mtime=0,
+        )
+        partition_size = 16384
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "kernel").write_bytes(kernel)
+            (root / "dtbo").write_bytes(dtbo)
+            (root / "recovery.img").write_bytes(
+                fake_recovery_image(kernel, dtbo, partition_size, ramdisk)
+            )
+
+            with self.assertRaisesRegex(
+                guard.ValidationError,
+                "duplicate newc record for system/bin/toybox",
+            ):
+                guard.validate_recovery_image(
+                    root / "recovery.img",
+                    root / "kernel",
+                    root / "dtbo",
+                    partition_size,
+                )
+
+    def test_recovery_requires_toybox_applet_symlinks(self):
+        kernel = fake_kernel(GZIP_INITRD_CONFIG)
+        dtbo = b"dtbo"
+        partition_size = 16384
+
+        for applet in ("printf", "dmesg"):
+            targets = {f"{applet}_target": b"missing"}
+            ramdisk = gzip.compress(
+                fake_cpio(b"\x7fELF" + bytes(60), **targets), mtime=0
+            )
+            with (
+                self.subTest(applet=applet),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                (root / "kernel").write_bytes(kernel)
+                (root / "dtbo").write_bytes(dtbo)
+                (root / "recovery.img").write_bytes(
+                    fake_recovery_image(kernel, dtbo, partition_size, ramdisk)
+                )
+
+                with self.assertRaisesRegex(
+                    guard.ValidationError,
+                    f"system/bin/{applet} must be a symlink to toybox",
+                ):
+                    guard.validate_recovery_image(
+                        root / "recovery.img",
+                        root / "kernel",
+                        root / "dtbo",
+                        partition_size,
+                    )
+
     def test_ramdisk_compression_must_match_kernel(self):
+        ramdisk = legacy_lz4(fake_cpio(b"\x7fELF" + bytes(60)))
         for lz4_supported in (False, True):
             config = GZIP_INITRD_CONFIG
             if lz4_supported:
@@ -114,7 +259,7 @@ class RecoveryImageGuardTest(unittest.TestCase):
             kernel = fake_kernel(config)
             dtbo = b"dtbo"
             image = fake_recovery_image(
-                kernel, dtbo, 16384, ramdisk=LEGACY_LZ4_RAMDISK
+                kernel, dtbo, 16384, ramdisk=ramdisk
             )
             with (
                 self.subTest(lz4_supported=lz4_supported),
@@ -140,7 +285,11 @@ class RecoveryImageGuardTest(unittest.TestCase):
                         )
 
     def test_lzma_ramdisk_requires_kernel_support(self):
-        ramdisk = lzma.compress(b"ramdisk", format=lzma.FORMAT_ALONE, preset=6)
+        ramdisk = lzma.compress(
+            fake_cpio(b"\x7fELF" + bytes(60)),
+            format=lzma.FORMAT_ALONE,
+            preset=6,
+        )
         for supported in (False, True):
             config = GZIP_INITRD_CONFIG
             if supported:
@@ -167,7 +316,9 @@ class RecoveryImageGuardTest(unittest.TestCase):
 
     def test_runtime_kernel_must_fit_abl_workspace(self):
         # The failed image's compressed ramdisk leaves exactly 0x370d000 bytes.
-        ramdisk = gzip.compress(b"ramdisk", mtime=0).ljust(29821896, b"\0")
+        ramdisk = gzip.compress(
+            fake_cpio(b"\x7fELF" + bytes(60)), mtime=0
+        ).ljust(29821896, b"\0")
         partition_size = 32 * 1024 * 1024
         for image_size in (0x370D000, 0x3940000):
             kernel = fake_kernel(GZIP_INITRD_CONFIG, image_size=image_size)
