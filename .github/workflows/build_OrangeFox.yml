@@ -15,6 +15,7 @@ jobs:
       # Keep the payload and digest pinned together. New combinations need
       # separate device boot validation after the packaging checks below.
       RECOVERY_KERNEL_SHA256: e328d96cba0ed1f3a4624a9f4ffba43342f5df3e8ff73eea6482f6f7e704c394
+      RECOVERY_8M_KERNEL_SHA256: 82093020d41d697f0b3ee82d9719748100f367a3770873ec338b1a3d2022df4d
       RECOVERY_DTBO_SHA256: ce97df9ec60a81200e3d49b0814d862402c0bc929ea529bbd0c134e74ff38cbe
       ORANGEFOX_BUILD_ENV_SHA: 265b1a256e061d9f3ca6e6767c6aa2bce4d9cb1a
       ORANGEFOX_SYNC_SHA: 14eca5f7ef82c9dacfe353db8b93329383c7293f
@@ -63,7 +64,7 @@ jobs:
           -o Acquire::Retries=3 \
           -o Acquire::http::Timeout=30 \
           -o Acquire::https::Timeout=30 \
-          install -y git aria2 python2 ccache curl xz-utils zip lz4 zstd
+          install -y git aria2 python2 ccache curl xz-utils zip lz4 zstd device-tree-compiler
         git clone https://gitlab.com/OrangeFox/misc/scripts
         cd scripts       
         git checkout --detach "${ORANGEFOX_BUILD_ENV_SHA}"
@@ -95,6 +96,8 @@ jobs:
           fox_12.1/build/soong fox_12.1/prebuilts/go/linux-x86/bin/go
         python3 -B -m unittest discover -s fox_12.1/device/realme/RMX1901/tests \
           -p test_recovery_image_guard.py
+        env -i PATH="$PATH" LANG=C python3 -B -m unittest discover -s fox_12.1/device/realme/RMX1901/tests \
+          -p test_sdsp_comparison.py
 
     - name: Validate pinned recovery inputs
       timeout-minutes: 5
@@ -145,6 +148,21 @@ jobs:
                     raise SystemExit(f'Invalid or mismatched Recovery image in {path}')
         PY
 
+    - name: Build and validate 8 MiB SDSP comparison
+      timeout-minutes: 10
+      run: |
+        env -i PATH="$PATH" LANG=C python3 -B fox_12.1/device/realme/RMX1901/tools/create_sdsp_8m_candidate.py \
+          --image fox_12.1/out/target/product/RMX1901/recovery.img \
+          --kernel fox_12.1/device/realme/RMX1901/prebuilt/Image.gz-dtb \
+          --dtbo fox_12.1/device/realme/RMX1901/prebuilt/dtbo.img \
+          --expected-kernel-sha256 "${RECOVERY_KERNEL_SHA256}" \
+          --expected-8m-sha256 "${RECOVERY_8M_KERNEL_SHA256}" \
+          --avbtool fox_12.1/external/avb/avbtool.py \
+          --avb-key fox_12.1/external/avb/test/data/testkey_rsa4096.pem \
+          --unpack-bootimg fox_12.1/system/tools/mkbootimg/unpack_bootimg.py \
+          --mkbootimg fox_12.1/out/host/linux-x86/bin/mkbootimg \
+          --output-dir fox_12.1/out/target/product/RMX1901/recovery-sdsp-8m
+
     - name: Upload recovery
       uses: actions/upload-artifact@26f96dfa697d77e81fd5907df203aa23a56210a8 # v4.3.0
       timeout-minutes: 10
@@ -153,5 +171,13 @@ jobs:
         path: |
           fox_12.1/out/target/product/*/Orange*.zip
           fox_12.1/out/target/product/*/recovery.img
+
+    - name: Upload 8 MiB SDSP comparison
+      uses: actions/upload-artifact@26f96dfa697d77e81fd5907df203aa23a56210a8 # v4.3.0
+      timeout-minutes: 10
+      with:
+        name: RMX1901-OFOX-ZSTD-8MiB-SDSP
+        path: fox_12.1/out/target/product/RMX1901/recovery-sdsp-8m/recovery.img
+        if-no-files-found: error
       
  

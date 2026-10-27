@@ -54,6 +54,9 @@
     "preserved_dtb_project_order": [18041, 18621, 19691, 19651],
     "preserved_dtb_size_bytes": 1507483,
     "preserved_dtb_sha256": "122aca1178a4971baa9af1e5c39cae2235b57fe89ac64cb341d9e0cdd41827f6",
+    "comparison_sdsp_region_size_bytes": 8388608,
+    "comparison_kernel_sha256": "82093020d41d697f0b3ee82d9719748100f367a3770873ec338b1a3d2022df4d",
+    "comparison_dtb_origin": "The four DTBs built from the recorded source and configuration; each differs from its preserved Recovery DTB only in the sdsp_region size.",
     "preserved_dtbo_size_bytes": 8845022,
     "preserved_dtbo_sha256": "ce97df9ec60a81200e3d49b0814d862402c0bc929ea529bbd0c134e74ff38cbe"
   },
