@@ -87,6 +87,12 @@ jobs:
       run: |
         patch --directory fox_12.1/build/make --strip 1 --forward --batch --fuzz=0 \
           < fox_12.1/device/realme/RMX1901/patches/orangefox-zstd-ramdisk.patch
+        patch --directory fox_12.1/build/soong --strip 1 --forward --batch --fuzz=0 \
+          < fox_12.1/device/realme/RMX1901/patches/soong-zstd-path.patch
+        zstd --version
+        env -i PATH="$PATH" LANG=C python3 -B \
+          fox_12.1/device/realme/RMX1901/tests/check_soong_zstd.py \
+          fox_12.1/build/soong fox_12.1/prebuilts/go/linux-x86/bin/go
         python3 -B -m unittest discover -s fox_12.1/device/realme/RMX1901/tests \
           -p test_recovery_image_guard.py
 

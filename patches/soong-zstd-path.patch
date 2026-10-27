@@ -1,0 +1,7 @@
+diff --git a/ui/build/paths/config.go b/ui/build/paths/config.go
+--- a/ui/build/paths/config.go
++++ b/ui/build/paths/config.go
+@@ -96 +96,2 @@
+-	"zip":     Allowed,
++	"zip":     Allowed,
++	"zstd":    Allowed,
