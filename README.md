@@ -27,45 +27,6 @@ lunch twrp_RMX1901-eng
 mka recoveryimage
 ```
 
-The recovery build pins a source rebuild of the selected `stock-next` BakaSU kernel from
-`kernel_realme_sdm710` commit `660c54270c9ddff443a652fb224dd249f27b8b8b`
-with BakaSU commit `39faf94a2d4a40d48093398bafcde649916edbc1` and the
-[backlight unlock patch](prebuilt/backlight-unlock.patch). The original delayed
-brightness path returned while holding `bd->update_lock`, blocking first-frame
-display initialization. The patch releases the lock while preserving the delay.
-The owner approved this source-rebuild plan after testing the released binary.
-The checked-in `prebuilt/Image.gz-dtb` combines the rebuilt kernel with the existing
-Recovery DTB group; the independent Recovery DTBO is preserved byte for byte.
-[Kernel provenance](prebuilt/kernel-provenance.json) records source, configuration,
-toolchain, build parameters and payload hashes. The pinned source reports
-`6.18.0-rmxdiag176` to userspace; its kernel internals remain `4.9.337`.
-Recovery uses an LZMA-Alone ramdisk, enabled by `BOARD_RAMDISK_USE_LZMA`
-and `OF_USE_LZMA_COMPRESSION`. The kernel supports LZMA, but not LZ4 or XZ.
-This also fits the loader workspace observed on RMX1901EX_11.C.02:
-`0x05600000 - 0x00080000 - ALIGN(ramdisk_size, 4096) - 0x00200000 - 8192`.
-The gzip candidate left 57,724,928 bytes for a kernel whose ARM64 header
-requires 60,030,976 bytes, exceeding this ABL limit.
-The image guard checks the embedded IKCONFIG, ARM64 runtime size, and this
-firmware-specific workspace before accepting a built image. Other bootloader
-layouts remain `unverified`.
-The complete-image check also requires an executable ELF `toybox` and its
-`printf`/`dmesg` applet symlinks. Do not overlay a standalone `printf` file:
-copying through the existing applet symlink can overwrite `toybox` and cause
-recursive process creation. Legacy LZ4 image inspection uses the host `lz4` tool.
-The base Recovery init owns ADB FunctionFS-ready configuration; the device
-overlay only starts `adbd` for ADB mode. This avoids duplicate gadget rebinding
-and uses the base ADB product ID `0xD001`. The complete-image guard rejects the
-duplicate three-property ADB trigger observed in the old ramdisk.
-Keep the prebuilt payload and `RECOVERY_KERNEL_SHA256` pin in sync rather than
-downloading from a moving kernel branch during CI.
-Validate the complete image and its AVB metadata before device testing.
-The 2026-10-27 candidate identified in the provenance passed UI and touch testing
-on the owner's RMX1901 / S3706 / OFILM phone, with an estimated 10–20 seconds
-from the first logo to usable UI. Entry-to-UI and ADB readiness durations were
-not measured. This image uses a current-source ramdisk repack; a fresh complete
-OrangeFox build and other device variants remain `unverified`.
-Future image changes require their own complete-image and device checks.
-
 To test it:
 
 ```
