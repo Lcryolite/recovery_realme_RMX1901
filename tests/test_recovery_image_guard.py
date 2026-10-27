@@ -25,6 +25,14 @@ GZIP_INITRD_CONFIG = (
     b"CONFIG_RD_GZIP=y\n"
     b"CONFIG_DECOMPRESS_GZIP=y\n"
 )
+BASE_ADB_READY_ACTION = (
+    b"on property:sys.usb.config=adb && property:sys.usb.ffs.ready=1 "
+    b"&& property:sys.usb.configfs=1\n"
+)
+DEVICE_ADB_READY_ACTION = (
+    b"on property:sys.usb.ffs.ready=1 && property:sys.usb.config=adb "
+    b"&& property:sys.usb.configfs=1\n"
+)
 
 
 def newc_entry(name: str, data: bytes, mode: int, ino: int) -> bytes:
@@ -249,6 +257,42 @@ class RecoveryImageGuardTest(unittest.TestCase):
                         root / "dtbo",
                         partition_size,
                     )
+
+    def test_recovery_rejects_duplicate_adb_ready_trigger_owners(self):
+        kernel = fake_kernel(GZIP_INITRD_CONFIG)
+        dtbo = b"dtbo"
+        init_entries = (
+            newc_entry(
+                "system/etc/init/hw/init.rc", BASE_ADB_READY_ACTION, 0o100644, 4
+            ),
+            newc_entry(
+                "init.recovery.usb.rc", DEVICE_ADB_READY_ACTION, 0o100644, 5
+            ),
+        )
+        ramdisk = gzip.compress(
+            fake_cpio(b"\x7fELF" + bytes(60), extra_entries=init_entries),
+            mtime=0,
+        )
+        partition_size = 16384
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "kernel").write_bytes(kernel)
+            (root / "dtbo").write_bytes(dtbo)
+            (root / "recovery.img").write_bytes(
+                fake_recovery_image(kernel, dtbo, partition_size, ramdisk)
+            )
+
+            with self.assertRaisesRegex(
+                guard.ValidationError,
+                "ADB FunctionFS ready trigger has multiple owners",
+            ):
+                guard.validate_recovery_image(
+                    root / "recovery.img",
+                    root / "kernel",
+                    root / "dtbo",
+                    partition_size,
+                )
 
     def test_ramdisk_compression_must_match_kernel(self):
         ramdisk = legacy_lz4(fake_cpio(b"\x7fELF" + bytes(60)))

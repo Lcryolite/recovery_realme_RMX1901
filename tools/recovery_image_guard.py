@@ -23,6 +23,13 @@ BOOT_HEADER_V1_SIZE = 1648
 ABL_KERNEL_WINDOW_SIZE = 0x05600000
 ABL_KERNEL_LOAD_OFFSET = 0x00080000
 ABL_DTB_RESERVE = 0x00200000
+ADB_READY_TRIGGER = frozenset(
+    (
+        b"property:sys.usb.config=adb",
+        b"property:sys.usb.ffs.ready=1",
+        b"property:sys.usb.configfs=1",
+    )
+)
 
 
 class ValidationError(ValueError):
@@ -168,6 +175,7 @@ def validate_ramdisk_applets(cpio: bytes) -> None:
         b"system/bin/printf": None,
         b"system/bin/dmesg": None,
     }
+    adb_ready_trigger_owners: list[bytes] = []
     offset = 0
 
     while True:
@@ -200,6 +208,15 @@ def validate_ramdisk_applets(cpio: bytes) -> None:
             raise ValidationError(f"truncated newc data for {name!r}")
         data = cpio[data_start:data_end]
 
+        if stat.S_IFMT(mode) == stat.S_IFREG and name.endswith(b".rc"):
+            for line in data.splitlines():
+                stripped = line.strip()
+                if stripped.startswith(b"on ") and frozenset(
+                    condition.strip()
+                    for condition in stripped[3:].split(b" && ")
+                ) == ADB_READY_TRIGGER:
+                    adb_ready_trigger_owners.append(name)
+
         if name in required:
             if required[name] is not None:
                 raise ValidationError(f"duplicate newc record for {name.decode()}")
@@ -213,6 +230,11 @@ def validate_ramdisk_applets(cpio: bytes) -> None:
     missing = [name.decode() for name, record in required.items() if record is None]
     if missing:
         raise ValidationError(f"Recovery ramdisk is missing {', '.join(missing)}")
+    if len(adb_ready_trigger_owners) > 1:
+        owners = ", ".join(name.decode() for name in adb_ready_trigger_owners)
+        raise ValidationError(
+            f"ADB FunctionFS ready trigger has multiple owners: {owners}"
+        )
 
     toybox_mode, toybox = required[b"system/bin/toybox"]
     if (

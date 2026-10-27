@@ -45,6 +45,10 @@ The complete-image check also requires an executable ELF `toybox` and its
 `printf`/`dmesg` applet symlinks. Do not overlay a standalone `printf` file:
 copying through the existing applet symlink can overwrite `toybox` and cause
 recursive process creation. Legacy LZ4 image inspection uses the host `lz4` tool.
+The base Recovery init owns ADB FunctionFS-ready configuration; the device
+overlay only starts `adbd` for ADB mode. This avoids duplicate gadget rebinding
+and uses the base ADB product ID `0xD001`. The complete-image guard rejects the
+duplicate three-property ADB trigger observed in the old ramdisk.
 Keep the prebuilt payload and `RECOVERY_KERNEL_SHA256` pin in sync rather than
 downloading from a moving kernel branch during CI.
 Validate the complete image and its AVB metadata before device testing.
