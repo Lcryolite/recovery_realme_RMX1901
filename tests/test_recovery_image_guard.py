@@ -25,6 +25,11 @@ GZIP_INITRD_CONFIG = (
     b"CONFIG_RD_GZIP=y\n"
     b"CONFIG_DECOMPRESS_GZIP=y\n"
 )
+ZSTD_INITRD_CONFIG = (
+    b"CONFIG_RD_ZSTD=y\n"
+    b"CONFIG_DECOMPRESS_ZSTD=y\n"
+    b"CONFIG_ZSTD_DECOMPRESS=y\n"
+)
 BASE_ADB_READY_ACTION = (
     b"on property:sys.usb.config=adb && property:sys.usb.ffs.ready=1 "
     b"&& property:sys.usb.configfs=1\n"
@@ -357,6 +362,77 @@ class RecoveryImageGuardTest(unittest.TestCase):
                         guard.validate_recovery_image(
                             root / "recovery.img", root / "kernel", root / "dtbo", 16384
                         )
+
+    def test_zstd_ramdisk_requires_kernel_support_and_valid_data(self):
+        cpio = fake_cpio(b"\x7fELF" + bytes(60))
+        ramdisk = subprocess.run(
+            ["zstd", "-3", "-c", "-q"],
+            input=cpio,
+            stdout=subprocess.PIPE,
+            check=True,
+        ).stdout
+        large_window = subprocess.run(
+            ["zstd", "-3", "--long=28", "-c", "-q"],
+            input=cpio,
+            stdout=subprocess.PIPE,
+            check=True,
+        ).stdout
+        cases = (
+            (b"", ramdisk, "CONFIG_RD_ZSTD"),
+            (b"CONFIG_RD_ZSTD=y\n", ramdisk, "CONFIG_DECOMPRESS_ZSTD"),
+            (
+                b"CONFIG_RD_ZSTD=y\nCONFIG_DECOMPRESS_ZSTD=y\n",
+                ramdisk,
+                "CONFIG_ZSTD_DECOMPRESS",
+            ),
+            (
+                ZSTD_INITRD_CONFIG,
+                ramdisk[:-2],
+                "invalid zstd",
+            ),
+            (
+                ZSTD_INITRD_CONFIG,
+                large_window,
+                "invalid zstd",
+            ),
+            (ZSTD_INITRD_CONFIG, ramdisk, None),
+        )
+        for extra_config, data, error in cases:
+            with self.subTest(error=error), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                kernel = fake_kernel(GZIP_INITRD_CONFIG + extra_config)
+                (root / "kernel").write_bytes(kernel)
+                (root / "dtbo").write_bytes(b"dtbo")
+                (root / "recovery.img").write_bytes(
+                    fake_recovery_image(kernel, b"dtbo", 16384, data)
+                )
+                if error:
+                    with self.assertRaisesRegex(guard.ValidationError, error):
+                        guard.validate_recovery_image(
+                            root / "recovery.img", root / "kernel", root / "dtbo", 16384
+                        )
+                else:
+                    guard.validate_recovery_image(
+                        root / "recovery.img", root / "kernel", root / "dtbo", 16384,
+                        expected_ramdisk_format="zstd",
+                    )
+
+    def test_recovery_rejects_unexpected_ramdisk_format(self):
+        kernel = fake_kernel(GZIP_INITRD_CONFIG)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "kernel").write_bytes(kernel)
+            (root / "dtbo").write_bytes(b"dtbo")
+            (root / "recovery.img").write_bytes(
+                fake_recovery_image(kernel, b"dtbo", 16384)
+            )
+            with self.assertRaisesRegex(
+                guard.ValidationError, "format is gzip, expected zstd"
+            ):
+                guard.validate_recovery_image(
+                    root / "recovery.img", root / "kernel", root / "dtbo", 16384,
+                    expected_ramdisk_format="zstd",
+                )
 
     def test_runtime_kernel_must_fit_abl_workspace(self):
         # The failed image's compressed ramdisk leaves exactly 0x370d000 bytes.

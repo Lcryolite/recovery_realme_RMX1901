@@ -105,9 +105,10 @@ TARGET_NO_RECOVERY := false
 
 # Recovery Compression
 TARGET_USES_MKE2FS := true
-# LZMA fits the verified ABL workspace; the pinned kernel has no LZ4 support.
+# Zstd support is provided by the pinned Recovery kernel.
 BOARD_RAMDISK_USE_LZ4 := false
-BOARD_RAMDISK_USE_LZMA := true
+BOARD_RAMDISK_USE_LZMA := false
+BOARD_RAMDISK_USE_ZSTD := true
 
 # Crypto
 TW_INCLUDE_CRYPTO := true

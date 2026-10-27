@@ -1,17 +1,20 @@
 name: Build-RMX1901-OrangeFox-recovery
 on: [workflow_dispatch]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 180
     env:
-      # kernel_realme_sdm710 stock-next@660c54270c9ddff443a652fb224dd249f27b8b8b
-      # with BakaSU@39faf94a2d4a40d48093398bafcde649916edbc1 and the backlight unlock fix.
+      # kernel_realme_sdm710@c860b90b8531edcb502ecbef5fd8948f299e16ef
+      # with BakaSU@d5e9e025b8b49155f8014684d64c91742b465f65 and the backlight unlock fix.
       # Recovery DTBs are preserved; see prebuilt/kernel-provenance.json.
       # Keep the payload and digest pinned together. New combinations need
       # separate device boot validation after the packaging checks below.
-      RECOVERY_KERNEL_SHA256: db08577caf200832542b810d9073db8cbcb3fe060eea0bfce3442089c55b9e00
+      RECOVERY_KERNEL_SHA256: e328d96cba0ed1f3a4624a9f4ffba43342f5df3e8ff73eea6482f6f7e704c394
       RECOVERY_DTBO_SHA256: ce97df9ec60a81200e3d49b0814d862402c0bc929ea529bbd0c134e74ff38cbe
       ORANGEFOX_BUILD_ENV_SHA: 265b1a256e061d9f3ca6e6767c6aa2bce4d9cb1a
       ORANGEFOX_SYNC_SHA: 14eca5f7ef82c9dacfe353db8b93329383c7293f
@@ -60,7 +63,7 @@ jobs:
           -o Acquire::Retries=3 \
           -o Acquire::http::Timeout=30 \
           -o Acquire::https::Timeout=30 \
-          install -y git aria2 python2 ccache curl xz-utils zip
+          install -y git aria2 python2 ccache curl xz-utils zip lz4 zstd
         git clone https://gitlab.com/OrangeFox/misc/scripts
         cd scripts       
         git checkout --detach "${ORANGEFOX_BUILD_ENV_SHA}"
@@ -78,6 +81,14 @@ jobs:
       timeout-minutes: 10
       with:
         path: fox_12.1/device/realme/RMX1901
+        persist-credentials: false
+
+    - name: Enable Zstd ramdisk compression
+      run: |
+        patch --directory fox_12.1/build/make --strip 1 --forward --batch --fuzz=0 \
+          < fox_12.1/device/realme/RMX1901/patches/orangefox-zstd-ramdisk.patch
+        python3 -B -m unittest discover -s fox_12.1/device/realme/RMX1901/tests \
+          -p test_recovery_image_guard.py
 
     - name: Validate pinned recovery inputs
       timeout-minutes: 5
@@ -105,10 +116,28 @@ jobs:
           fox_12.1/out/target/product/RMX1901/recovery.img \
           --kernel fox_12.1/device/realme/RMX1901/prebuilt/Image.gz-dtb \
           --dtbo fox_12.1/device/realme/RMX1901/prebuilt/dtbo.img \
-          --partition-size 67108864
+          --partition-size 67108864 \
+          --ramdisk-format zstd
         python3 fox_12.1/external/avb/avbtool.py verify_image \
           --image fox_12.1/out/target/product/RMX1901/recovery.img \
           --key fox_12.1/external/avb/test/data/testkey_rsa4096.pem
+        python3 - <<'PY'
+        from pathlib import Path
+        from zipfile import ZipFile
+
+        output = Path('fox_12.1/out/target/product/RMX1901')
+        image = (output / 'recovery.img').read_bytes()
+        archives = list(output.glob('Orange*.zip'))
+        if not archives:
+            raise SystemExit('No OrangeFox ZIP was produced')
+        for path in archives:
+            with ZipFile(path) as archive:
+                members = [entry for entry in archive.infolist()
+                           if entry.filename == 'recovery.img']
+                if (len(members) != 1 or archive.testzip()
+                        or archive.read('recovery.img') != image):
+                    raise SystemExit(f'Invalid or mismatched Recovery image in {path}')
+        PY
 
     - name: Upload recovery
       uses: actions/upload-artifact@26f96dfa697d77e81fd5907df203aa23a56210a8 # v4.3.0
@@ -117,5 +146,6 @@ jobs:
         name: RMX1901-OFOX-RUI1-RUI2-UNZIP
         path: |
           fox_12.1/out/target/product/*/Orange*.zip
+          fox_12.1/out/target/product/*/recovery.img
       
  

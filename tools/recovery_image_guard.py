@@ -114,6 +114,8 @@ def validate_ramdisk_support(raw_kernel: bytes, ramdisk: bytes) -> str:
         compression = "gzip"
     elif ramdisk.startswith(b"\x02\x21\x4c\x18"):
         compression = "lz4"
+    elif ramdisk.startswith(b"\x28\xb5\x2f\xfd"):
+        compression = "zstd"
     elif ramdisk.startswith(b"\x5d\x00"):
         compression = "lzma"
     else:
@@ -138,6 +140,8 @@ def validate_ramdisk_support(raw_kernel: bytes, ramdisk: bytes) -> str:
         b"CONFIG_RD_" + suffix,
         b"CONFIG_DECOMPRESS_" + suffix,
     ]
+    if compression == "zstd":
+        required.append(b"CONFIG_ZSTD_DECOMPRESS")
     missing = [option.decode() for option in required if option + b"=y" not in enabled]
     if missing:
         raise ValidationError(
@@ -152,8 +156,14 @@ def decompress_ramdisk(ramdisk: bytes, compression: str) -> bytes:
             return gzip.decompress(ramdisk)
         if compression == "lzma":
             return lzma.decompress(ramdisk, format=lzma.FORMAT_ALONE)
+        # The kernel's Zstd decoder permits a window of at most 128 MiB.
+        command = (
+            ["zstd", "-d", "-c", "-M134217728"]
+            if compression == "zstd"
+            else ["lz4", "-d", "-c"]
+        )
         result = subprocess.run(
-            ["lz4", "-d", "-c"],
+            command,
             input=ramdisk,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -165,7 +175,7 @@ def decompress_ramdisk(ramdisk: bytes, compression: str) -> bytes:
         ) from error
     if result.returncode:
         detail = result.stderr.decode(errors="replace").strip()
-        raise ValidationError(f"invalid lz4 Recovery ramdisk: {detail}")
+        raise ValidationError(f"invalid {compression} Recovery ramdisk: {detail}")
     return result.stdout
 
 
@@ -276,7 +286,11 @@ def validate_abl_workspace(
 
 
 def validate_recovery_image(
-    path: Path, kernel_path: Path, dtbo_path: Path, partition_size: int
+    path: Path,
+    kernel_path: Path,
+    dtbo_path: Path,
+    partition_size: int,
+    expected_ramdisk_format: str | None = None,
 ) -> None:
     image = path.read_bytes()
     kernel = kernel_path.read_bytes()
@@ -334,6 +348,10 @@ def validate_recovery_image(
     compression = validate_ramdisk_support(
         raw_kernel, image[ramdisk_offset : ramdisk_offset + ramdisk_size]
     )
+    if expected_ramdisk_format and compression != expected_ramdisk_format:
+        raise ValidationError(
+            f"recovery ramdisk format is {compression}, expected {expected_ramdisk_format}"
+        )
     ramdisk = image[ramdisk_offset : ramdisk_offset + ramdisk_size]
     validate_ramdisk_applets(decompress_ramdisk(ramdisk, compression))
     runtime_size, workspace = validate_abl_workspace(
@@ -360,6 +378,9 @@ def parser() -> argparse.ArgumentParser:
     image_parser.add_argument("--kernel", required=True, type=Path)
     image_parser.add_argument("--dtbo", required=True, type=Path)
     image_parser.add_argument("--partition-size", required=True, type=int)
+    image_parser.add_argument(
+        "--ramdisk-format", choices=("gzip", "lz4", "lzma", "zstd")
+    )
     return command_parser
 
 
@@ -370,7 +391,7 @@ def main() -> int:
             validate_kernel(args.path, args.expected_sha256)
         else:
             validate_recovery_image(
-                args.path, args.kernel, args.dtbo, args.partition_size
+                args.path, args.kernel, args.dtbo, args.partition_size, args.ramdisk_format
             )
     except (OSError, ValidationError) as error:
         print(f"recovery image validation failed: {error}", file=sys.stderr)
