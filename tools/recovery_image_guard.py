@@ -4,8 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
+import lzma
+import stat
 import struct
+import subprocess
 import sys
 import zlib
 from pathlib import Path
@@ -15,6 +19,17 @@ FDT_MAGIC = b"\xd0\r\xfe\xed"
 BOOT_MAGIC = b"ANDROID!"
 AVB_FOOTER_MAGIC = b"AVBf"
 BOOT_HEADER_V1_SIZE = 1648
+# Observed RMX1901 C.02 ABL fallback layout, including its two page guards.
+ABL_KERNEL_WINDOW_SIZE = 0x05600000
+ABL_KERNEL_LOAD_OFFSET = 0x00080000
+ABL_DTB_RESERVE = 0x00200000
+ADB_READY_TRIGGER = frozenset(
+    (
+        b"property:sys.usb.config=adb",
+        b"property:sys.usb.ffs.ready=1",
+        b"property:sys.usb.configfs=1",
+    )
+)
 
 
 class ValidationError(ValueError):
@@ -94,6 +109,172 @@ def u64(image: bytes, offset: int) -> int:
     return struct.unpack_from("<Q", image, offset)[0]
 
 
+def validate_ramdisk_support(raw_kernel: bytes, ramdisk: bytes) -> str:
+    if ramdisk.startswith(b"\x1f\x8b"):
+        compression = "gzip"
+    elif ramdisk.startswith(b"\x02\x21\x4c\x18"):
+        compression = "lz4"
+    elif ramdisk.startswith(b"\x5d\x00"):
+        compression = "lzma"
+    else:
+        raise ValidationError("unsupported Recovery ramdisk compression")
+
+    try:
+        marker = b"IKCFG_ST\x1f\x8b\x08"
+        offset = raw_kernel.find(marker)
+        if offset < 0:
+            raise ValidationError("kernel has no embedded IKCONFIG for ramdisk validation")
+        reader = zlib.decompressobj(31)
+        config = reader.decompress(raw_kernel[offset + 8 :]) + reader.flush()
+    except zlib.error as error:
+        raise ValidationError(f"invalid embedded kernel configuration: {error}") from error
+
+    if not reader.eof or not reader.unused_data.startswith(b"IKCFG_ED"):
+        raise ValidationError("embedded kernel configuration is truncated or invalid")
+    enabled = set(config.splitlines())
+    suffix = compression.upper().encode()
+    required = [
+        b"CONFIG_BLK_DEV_INITRD",
+        b"CONFIG_RD_" + suffix,
+        b"CONFIG_DECOMPRESS_" + suffix,
+    ]
+    missing = [option.decode() for option in required if option + b"=y" not in enabled]
+    if missing:
+        raise ValidationError(
+            f"{compression} ramdisk requires {', '.join(missing)} in kernel configuration"
+        )
+    return compression
+
+
+def decompress_ramdisk(ramdisk: bytes, compression: str) -> bytes:
+    try:
+        if compression == "gzip":
+            return gzip.decompress(ramdisk)
+        if compression == "lzma":
+            return lzma.decompress(ramdisk, format=lzma.FORMAT_ALONE)
+        result = subprocess.run(
+            ["lz4", "-d", "-c"],
+            input=ramdisk,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except (OSError, EOFError, lzma.LZMAError) as error:
+        raise ValidationError(
+            f"invalid {compression} Recovery ramdisk: {error}"
+        ) from error
+    if result.returncode:
+        detail = result.stderr.decode(errors="replace").strip()
+        raise ValidationError(f"invalid lz4 Recovery ramdisk: {detail}")
+    return result.stdout
+
+
+def validate_ramdisk_applets(cpio: bytes) -> None:
+    required: dict[bytes, tuple[int, bytes] | None] = {
+        b"system/bin/toybox": None,
+        b"system/bin/printf": None,
+        b"system/bin/dmesg": None,
+    }
+    adb_ready_trigger_owners: list[bytes] = []
+    offset = 0
+
+    while True:
+        if len(cpio) - offset < 110:
+            raise ValidationError("Recovery ramdisk has a truncated newc header")
+        header = cpio[offset : offset + 110]
+        if header[:6] not in (b"070701", b"070702"):
+            raise ValidationError(f"invalid newc magic at offset {offset}")
+        try:
+            fields = [
+                int(header[index : index + 8], 16)
+                for index in range(6, 110, 8)
+            ]
+        except ValueError as error:
+            raise ValidationError(f"invalid newc header at offset {offset}") from error
+        mode = fields[1]
+        file_size = fields[6]
+        name_size = fields[11]
+        if name_size < 1:
+            raise ValidationError(f"invalid newc name size at offset {offset}")
+
+        name_start = offset + 110
+        name_end = name_start + name_size
+        if name_end > len(cpio) or cpio[name_end - 1] != 0:
+            raise ValidationError(f"truncated newc name at offset {offset}")
+        name = cpio[name_start : name_end - 1]
+        data_start = align(name_end, 4)
+        data_end = data_start + file_size
+        if data_end > len(cpio):
+            raise ValidationError(f"truncated newc data for {name!r}")
+        data = cpio[data_start:data_end]
+
+        if stat.S_IFMT(mode) == stat.S_IFREG and name.endswith(b".rc"):
+            for line in data.splitlines():
+                stripped = line.strip()
+                if stripped.startswith(b"on ") and frozenset(
+                    condition.strip()
+                    for condition in stripped[3:].split(b" && ")
+                ) == ADB_READY_TRIGGER:
+                    adb_ready_trigger_owners.append(name)
+
+        if name in required:
+            if required[name] is not None:
+                raise ValidationError(f"duplicate newc record for {name.decode()}")
+            required[name] = (mode, data)
+        if name == b"TRAILER!!!":
+            if any(cpio[align(data_end, 4) :]):
+                raise ValidationError("Recovery ramdisk has data after the newc trailer")
+            break
+        offset = align(data_end, 4)
+
+    missing = [name.decode() for name, record in required.items() if record is None]
+    if missing:
+        raise ValidationError(f"Recovery ramdisk is missing {', '.join(missing)}")
+    if len(adb_ready_trigger_owners) > 1:
+        owners = ", ".join(name.decode() for name in adb_ready_trigger_owners)
+        raise ValidationError(
+            f"ADB FunctionFS ready trigger has multiple owners: {owners}"
+        )
+
+    toybox_mode, toybox = required[b"system/bin/toybox"]
+    if (
+        stat.S_IFMT(toybox_mode) != stat.S_IFREG
+        or not toybox_mode & 0o111
+        or not toybox.startswith(b"\x7fELF")
+    ):
+        raise ValidationError("system/bin/toybox must be a regular executable ELF")
+    for name in (b"system/bin/printf", b"system/bin/dmesg"):
+        mode, target = required[name]
+        if stat.S_IFMT(mode) != stat.S_IFLNK or target != b"toybox":
+            raise ValidationError(f"{name.decode()} must be a symlink to toybox")
+
+
+def validate_abl_workspace(
+    raw_kernel: bytes, kernel_size: int, ramdisk_size: int, page_size: int
+) -> tuple[int, int]:
+    if page_size != 4096:
+        raise ValidationError("the verified RMX1901 ABL layout requires 4096-byte pages")
+    if len(raw_kernel) < 64 or raw_kernel[56:60] != b"ARMd":
+        raise ValidationError("kernel has no ARM64 Image header")
+    runtime_size = u64(raw_kernel, 16)
+    if runtime_size == 0:
+        raise ValidationError("ARM64 kernel runtime size is unavailable")
+    workspace = (
+        ABL_KERNEL_WINDOW_SIZE
+        - ABL_KERNEL_LOAD_OFFSET
+        - align(ramdisk_size, page_size)
+        - ABL_DTB_RESERVE
+        - 2 * page_size
+    )
+    if kernel_size >= workspace or len(raw_kernel) > workspace:
+        raise ValidationError("compressed or inflated kernel does not fit ABL workspace")
+    if runtime_size > workspace:
+        raise ValidationError(
+            f"kernel runtime size {runtime_size} exceeds ABL workspace {workspace}"
+        )
+    return runtime_size, workspace
+
+
 def validate_recovery_image(
     path: Path, kernel_path: Path, dtbo_path: Path, partition_size: int
 ) -> None:
@@ -146,9 +327,23 @@ def validate_recovery_image(
     if image[-64:-60] != AVB_FOOTER_MAGIC:
         raise ValidationError("recovery image has no AVB footer")
 
+    try:
+        raw_kernel = zlib.decompress(kernel, 31)
+    except zlib.error as error:
+        raise ValidationError(f"kernel gzip stream is invalid: {error}") from error
+    compression = validate_ramdisk_support(
+        raw_kernel, image[ramdisk_offset : ramdisk_offset + ramdisk_size]
+    )
+    ramdisk = image[ramdisk_offset : ramdisk_offset + ramdisk_size]
+    validate_ramdisk_applets(decompress_ramdisk(ramdisk, compression))
+    runtime_size, workspace = validate_abl_workspace(
+        raw_kernel, kernel_size, ramdisk_size, page_size
+    )
     print(
         f"recovery image OK: sha256={sha256(image)} kernel={kernel_size} "
-        f"ramdisk={ramdisk_size} dtbo={recovery_dtbo_size}"
+        f"ramdisk={ramdisk_size} ramdisk_format={compression} dtbo={recovery_dtbo_size} "
+        f"kernel_runtime={runtime_size} abl_workspace={workspace} "
+        f"abl_headroom={workspace - runtime_size}"
     )
 
 
