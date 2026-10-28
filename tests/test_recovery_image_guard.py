@@ -3,6 +3,7 @@ import importlib.util
 import lzma
 import struct
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -171,6 +172,74 @@ class RecoveryImageGuardTest(unittest.TestCase):
                 guard.validate_recovery_image(
                     image_path, kernel_path, dtbo_path, partition_size
                 )
+
+    def test_recovery_can_require_disabled_bakasu_preinit(self):
+        kernel = fake_kernel(GZIP_INITRD_CONFIG)
+        dtbo = b"dtbo"
+        partition_size = 16384
+        image = fake_recovery_image(kernel, dtbo, partition_size)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image_path = root / "recovery.img"
+            kernel_path = root / "Image.gz-dtb"
+            dtbo_path = root / "dtbo.img"
+            kernel_path.write_bytes(kernel)
+            dtbo_path.write_bytes(dtbo)
+
+            def set_cmdline(main: bytes, extra: bytes = b"") -> None:
+                updated = bytearray(image)
+                updated[64:576] = main.ljust(512, b"\0")
+                updated[608:1632] = extra.ljust(1024, b"\0")
+                image_path.write_bytes(updated)
+
+            set_cmdline(b"console=ttyMSM0 kernelsu.preinit=0")
+            guard.validate_recovery_image(
+                image_path, kernel_path, dtbo_path, partition_size,
+                require_disabled_preinit=True,
+            )
+
+            prefix = b"console=ttyMSM0 "
+            suffix = b" kernelsu."
+            set_cmdline(
+                prefix + b"x" * (512 - len(prefix) - len(suffix)) + suffix,
+                b"preinit=0",
+            )
+            guard.validate_recovery_image(
+                image_path, kernel_path, dtbo_path, partition_size,
+                require_disabled_preinit=True,
+            )
+
+            for cmdline in (
+                b"console=ttyMSM0",
+                b"kernelsu.preinit=1",
+                b"kernelsu.preinit=0 kernelsu.preinit=1",
+                b"-- kernelsu.preinit=0",
+                b"kernelsu.preinit=0extra",
+            ):
+                with self.subTest(cmdline=cmdline):
+                    set_cmdline(cmdline)
+                    with self.assertRaisesRegex(
+                        guard.ValidationError, "disable BakaSU preinit"
+                    ):
+                        guard.validate_recovery_image(
+                            image_path, kernel_path, dtbo_path, partition_size,
+                            require_disabled_preinit=True,
+                        )
+
+            set_cmdline(b"console=ttyMSM0")
+            guard.validate_recovery_image(image_path, kernel_path, dtbo_path, partition_size)
+            result = subprocess.run(
+                [
+                    sys.executable, str(MODULE_PATH), "image", str(image_path),
+                    "--kernel", str(kernel_path), "--dtbo", str(dtbo_path),
+                    "--partition-size", str(partition_size), "--require-disabled-preinit",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("disable BakaSU preinit", result.stderr)
 
     def test_recovery_rejects_toybox_overwritten_through_applet_symlink(self):
         kernel = fake_kernel(GZIP_INITRD_CONFIG)

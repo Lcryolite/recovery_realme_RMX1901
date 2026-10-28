@@ -62,7 +62,26 @@
   },
   "device_acceptance": {
     "hardware": "owner RMX1901, Synaptics S3706 / OFILM",
-    "current_kernel_and_zstd_ramdisk": "unverified",
+    "current_kernel_and_zstd_ramdisk": "owner_confirmed_pass_with_kernelsu.preinit=0",
+    "default_4m": {
+      "image_sha256": "054e4833c2ebdc3b091b2b39d566a9c32f91d8a704c3705e0951d2e732fb4420",
+      "image_origin": "CI candidate repacked with kernelsu.preinit=0",
+      "sdsp_region_size_bytes": 4194304,
+      "cma_pool_size_bytes_from_repeat_boot_log": 4194304,
+      "ui_and_touch": "owner_confirmed_pass",
+      "owner_reported_entry_to_interactive_ui": "approximately 20 seconds",
+      "adb_first_observed_at_kernel_uptime_seconds": 16.64
+    },
+    "comparison_8m": {
+      "image_sha256": "693fd09f32f596aef77a8835fcd24ebbd758b4bc269b0454d30907fc26a48c52",
+      "image_origin": "SDSP comparison generated from the tested 4 MiB candidate",
+      "sdsp_region_size_bytes": 8388608,
+      "cma_pool_size_bytes_from_boot_log": 8388608,
+      "ui_and_touch": "owner_confirmed_pass",
+      "owner_reported_entry_to_interactive_ui": "similar to the 4 MiB candidate",
+      "adb_first_observed_at_kernel_uptime_seconds": 14.14
+    },
+    "preinit_configuration": "disabled in the tested Recovery images",
     "other_device_variants": "unverified",
     "fallback_image_sha256": "b161380bd0a24fd85f7ba9af550802a6197a9395b162db042e8633b23c1cf7c6",
     "fallback_ui_and_touch": "owner_confirmed_pass",

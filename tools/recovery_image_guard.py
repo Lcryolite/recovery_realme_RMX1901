@@ -285,12 +285,30 @@ def validate_abl_workspace(
     return runtime_size, workspace
 
 
+def validate_disabled_preinit(image: bytes) -> None:
+    cmdline = image[64:576].split(b"\0", 1)[0]
+    cmdline += image[608:1632].split(b"\0", 1)[0]
+    arguments = cmdline.split()
+    matches = [
+        i
+        for i, arg in enumerate(arguments)
+        if arg == b"kernelsu.preinit" or arg.startswith(b"kernelsu.preinit=")
+    ]
+    if (
+        len(matches) != 1
+        or arguments[matches[0]] != b"kernelsu.preinit=0"
+        or b"--" in arguments[: matches[0]]
+    ):
+        raise ValidationError("Recovery must disable BakaSU preinit exactly once")
+
+
 def validate_recovery_image(
     path: Path,
     kernel_path: Path,
     dtbo_path: Path,
     partition_size: int,
     expected_ramdisk_format: str | None = None,
+    require_disabled_preinit: bool = False,
 ) -> None:
     image = path.read_bytes()
     kernel = kernel_path.read_bytes()
@@ -318,6 +336,8 @@ def validate_recovery_image(
             f"expected boot header v1/{BOOT_HEADER_V1_SIZE}, got "
             f"v{header_version}/{header_size}"
         )
+    if require_disabled_preinit:
+        validate_disabled_preinit(image)
 
     kernel_offset = page_size
     ramdisk_offset = align(kernel_offset + kernel_size, page_size)
@@ -381,6 +401,7 @@ def parser() -> argparse.ArgumentParser:
     image_parser.add_argument(
         "--ramdisk-format", choices=("gzip", "lz4", "lzma", "zstd")
     )
+    image_parser.add_argument("--require-disabled-preinit", action="store_true")
     return command_parser
 
 
@@ -391,7 +412,8 @@ def main() -> int:
             validate_kernel(args.path, args.expected_sha256)
         else:
             validate_recovery_image(
-                args.path, args.kernel, args.dtbo, args.partition_size, args.ramdisk_format
+                args.path, args.kernel, args.dtbo, args.partition_size, args.ramdisk_format,
+                require_disabled_preinit=args.require_disabled_preinit,
             )
     except (OSError, ValidationError) as error:
         print(f"recovery image validation failed: {error}", file=sys.stderr)

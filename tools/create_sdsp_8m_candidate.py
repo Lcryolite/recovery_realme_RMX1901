@@ -119,7 +119,9 @@ def create_candidate(args) -> None:
     kernel = kernel_path.read_bytes()
     if guard.sha256(kernel) != args.expected_kernel_sha256.lower():
         raise guard.ValidationError("default kernel SHA-256 does not match the pinned input")
-    guard.validate_recovery_image(image, kernel_path, dtbo, PARTITION_SIZE, "zstd")
+    guard.validate_recovery_image(
+        image, kernel_path, dtbo, PARTITION_SIZE, "zstd", require_disabled_preinit=True
+    )
     verify_avb(avbtool, image, key)
 
     spec = importlib.util.spec_from_file_location("candidate_avbtool", avbtool)
@@ -188,7 +190,10 @@ def create_candidate(args) -> None:
 
         temporary_kernel = work / "Image.gz-dtb"
         temporary_kernel.write_bytes(comparison_kernel)
-        guard.validate_recovery_image(candidate, temporary_kernel, dtbo, PARTITION_SIZE, "zstd")
+        guard.validate_recovery_image(
+            candidate, temporary_kernel, dtbo, PARTITION_SIZE, "zstd",
+            require_disabled_preinit=True,
+        )
         output.mkdir(parents=True, exist_ok=True)
         with kernel_out.open("xb") as destination:
             destination.write(comparison_kernel)
