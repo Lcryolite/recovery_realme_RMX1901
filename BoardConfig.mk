@@ -46,6 +46,7 @@ TARGET_RECOVERY_FSTAB := $(DEVICE_PATH)/recovery/root/system/etc/recovery.fstab
 # Kernel
 # Note: androidboot.selinux=permissive unblocks recovery init & services on 4.9.337 custom kernel.
 # Disable BakaSU preinit when booting this Recovery image.
+# Reduce serial console output during Recovery startup; dmesg remains available.
 BOARD_KERNEL_CMDLINE := \
     console=ttyMSM0,115200n8 \
     earlycon=msm_geni_serial,0xA90000 \
@@ -64,7 +65,8 @@ BOARD_KERNEL_CMDLINE := \
     loop.max_part=7 \
     printk.devkmsg=on \
     kpti=off \
-    kernelsu.preinit=0
+    kernelsu.preinit=0 \
+    quiet
 
 BOARD_KERNEL_BASE := 0x00000000
 BOARD_KERNEL_PAGESIZE := 4096

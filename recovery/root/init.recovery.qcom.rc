@@ -33,6 +33,8 @@ on fs
 
 on init
     setprop vendor.gatekeeper.disable_spu true
+    # Skip OrangeFox's MIUI-specific ROM detection.
+    setprop ro.orangefox.vanilla 1
     export ENV /system/etc/mkshrc
     export BASH_ENV /system/etc/bash.bashrc
 

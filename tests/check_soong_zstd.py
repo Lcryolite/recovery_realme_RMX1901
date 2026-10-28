@@ -59,7 +59,7 @@ def main() -> int:
 
         sample = b"Recovery ramdisk compression check\n" * 16
         result = subprocess.run(
-            ["zstd", "-3", "-q", "-c"],
+            ["zstd", "-6", "-q", "-c"],
             input=sample,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
