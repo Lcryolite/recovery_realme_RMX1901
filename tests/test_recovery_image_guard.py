@@ -131,6 +131,140 @@ def fake_recovery_image(
 
 
 class RecoveryImageGuardTest(unittest.TestCase):
+    def test_diagnostics_rejects_quiet_kernel_cmdline(self):
+        image = bytearray(2048)
+        image[64:64 + len(b"console=tty quiet")] = b"console=tty quiet"
+        with self.assertRaises(guard.ValidationError):
+            guard.validate_diagnostics_cmdline(image)
+        image[64:576] = bytes(512)
+        image[64:64 + len(b"console=tty")] = b"console=tty"
+        guard.validate_diagnostics_cmdline(image)
+
+    def test_diagnostics_guard_checks_executables_and_recovery_init(self):
+        entries = (
+            newc_entry("system/bin/rmx1901-diagnostics", b"\x7fELFtest", 0o100755, 4),
+            newc_entry("system/bin/rmx1901-pstore-snapshot", b"\x7fELFtest", 0o100755, 5),
+            newc_entry("init.recovery.qcom.rc", b"on boot\n    start rmx1901-diagnostics\n"
+                       b"service rmx1901-diagnostics /system/bin/rmx1901-diagnostics --service\n", 0o100644, 6),
+            newc_entry("system/etc/init/hw/init.rc", b"on init\n    mount tmpfs tmpfs /tmp\n"
+                       b"    symlink /dev/null /tmp/recovery.log\n", 0o100644, 7),
+            newc_entry("ueventd.qcom.rc", b"/dev/mem 0600 root root\n", 0o100644, 8),
+        )
+        good = fake_cpio(b"\x7fELF" + bytes(60), extra_entries=entries)
+        guard.validate_ramdisk_applets(good, require_diagnostics=True)
+        for missing in range(len(entries)):
+            bad = fake_cpio(b"\x7fELF" + bytes(60),
+                            extra_entries=entries[:missing] + entries[missing + 1:])
+            with self.subTest(missing=missing), self.assertRaises(guard.ValidationError):
+                guard.validate_ramdisk_applets(bad, require_diagnostics=True)
+
+    def test_diagnostics_guard_rejects_a_live_recovery_logd(self):
+        entries = (
+            newc_entry("system/bin/rmx1901-diagnostics", b"\x7fELFtest", 0o100755, 4),
+            newc_entry("system/bin/rmx1901-pstore-snapshot", b"\x7fELFtest", 0o100755, 5),
+            newc_entry("init.recovery.qcom.rc", b"on boot\n    start rmx1901-diagnostics\n"
+                       b"service rmx1901-diagnostics /system/bin/rmx1901-diagnostics --service\n", 0o100644, 6),
+            newc_entry("system/etc/init/hw/init.rc", b"import /init.recovery.logd.rc\n"
+                       b"    symlink /dev/null /tmp/recovery.log\n", 0o100644, 7),
+            newc_entry("ueventd.qcom.rc", b"/dev/mem 0600 root root\n", 0o100644, 8),
+        )
+        cpio = fake_cpio(b"\x7fELF" + bytes(60), extra_entries=entries)
+        with self.assertRaises(guard.ValidationError):
+            guard.validate_ramdisk_applets(cpio, require_diagnostics=True)
+
+    def test_diagnostics_guard_rejects_automatic_pmsg_refresh(self):
+        entries = (
+            newc_entry("system/bin/rmx1901-diagnostics", b"\x7fELFtest", 0o100755, 4),
+            newc_entry("system/bin/rmx1901-pstore-snapshot", b"\x7fELFtest", 0o100755, 5),
+            newc_entry("init.recovery.qcom.rc", b"on boot\n    start rmx1901-diagnostics\n"
+                       b"service rmx1901-diagnostics /system/bin/rmx1901-diagnostics --service\n", 0o100644, 6),
+            newc_entry("system/etc/init/hw/init.rc", b"symlink /dev/null /tmp/recovery.log\n", 0o100644, 7),
+            newc_entry("ueventd.qcom.rc", b"/dev/mem 0600 root root\n", 0o100644, 8),
+            newc_entry("system/etc/init/recovery-refresh.rc",
+                       b"on post-fs\n    exec_background - system log -- /system/bin/recovery-refresh\n", 0o100644, 9),
+        )
+        with self.assertRaises(guard.ValidationError):
+            guard.validate_ramdisk_applets(fake_cpio(b"\x7fELF" + bytes(60), extra_entries=entries),
+                                           require_diagnostics=True)
+
+    def test_required_devmem_accepts_a_kernel_with_devmem_enabled(self):
+        kernel = fake_kernel(
+            GZIP_INITRD_CONFIG + b"CONFIG_DEVMEM=y\n# CONFIG_STRICT_DEVMEM is not set\n"
+        )
+        dtbo = b"dtbo"
+        partition_size = 16384
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image_path = root / "recovery.img"
+            kernel_path = root / "Image.gz-dtb"
+            dtbo_path = root / "dtbo.img"
+            image_path.write_bytes(fake_recovery_image(kernel, dtbo, partition_size))
+            kernel_path.write_bytes(kernel)
+            dtbo_path.write_bytes(dtbo)
+            result = subprocess.run(
+                [
+                    sys.executable, str(MODULE_PATH), "image", str(image_path),
+                    "--kernel", str(kernel_path), "--dtbo", str(dtbo_path),
+                    "--partition-size", str(partition_size), "--require-devmem",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_required_devmem_rejects_strict_software_filtering(self):
+        kernel = fake_kernel(
+            GZIP_INITRD_CONFIG + b"CONFIG_DEVMEM=y\nCONFIG_STRICT_DEVMEM=y\n"
+        )
+        dtbo = b"dtbo"
+        partition_size = 16384
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image_path = root / "recovery.img"
+            kernel_path = root / "Image.gz-dtb"
+            dtbo_path = root / "dtbo.img"
+            image_path.write_bytes(fake_recovery_image(kernel, dtbo, partition_size))
+            kernel_path.write_bytes(kernel)
+            dtbo_path.write_bytes(dtbo)
+            result = subprocess.run(
+                [
+                    sys.executable, str(MODULE_PATH), "image", str(image_path),
+                    "--kernel", str(kernel_path), "--dtbo", str(dtbo_path),
+                    "--partition-size", str(partition_size), "--require-devmem",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("must disable CONFIG_STRICT_DEVMEM", result.stderr)
+
+    def test_required_devmem_rejects_a_kernel_without_devmem(self):
+        kernel = fake_kernel(GZIP_INITRD_CONFIG + b"# CONFIG_DEVMEM is not set\n")
+        dtbo = b"dtbo"
+        partition_size = 16384
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image_path = root / "recovery.img"
+            kernel_path = root / "Image.gz-dtb"
+            dtbo_path = root / "dtbo.img"
+            image_path.write_bytes(fake_recovery_image(kernel, dtbo, partition_size))
+            kernel_path.write_bytes(kernel)
+            dtbo_path.write_bytes(dtbo)
+            result = subprocess.run(
+                [
+                    sys.executable, str(MODULE_PATH), "image", str(image_path),
+                    "--kernel", str(kernel_path), "--dtbo", str(dtbo_path),
+                    "--partition-size", str(partition_size), "--require-devmem",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("requires CONFIG_DEVMEM=y", result.stderr)
+
     def test_valid_kernel_and_dtb_group(self):
         kernel = fake_kernel()
         gzip_image, dtb_group = guard.split_kernel_dtb(kernel)

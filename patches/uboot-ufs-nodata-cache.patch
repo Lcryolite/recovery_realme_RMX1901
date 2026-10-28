@@ -1,0 +1,20 @@
+--- a/drivers/ufs/ufs-uclass.c
++++ b/drivers/ufs/ufs-uclass.c
+@@ -762,6 +762,8 @@
+ 	uintptr_t start_addr = (uintptr_t)addr & ~(ARCH_DMA_MINALIGN - 1);
+ 	uintptr_t end_addr = ALIGN((uintptr_t)addr + size, ARCH_DMA_MINALIGN);
+ 
++	if (!size)
++		return;
+ 	flush_dcache_range(start_addr, end_addr);
+ }
+ 
+@@ -775,6 +777,8 @@
+ 	uintptr_t start_addr = (uintptr_t)addr & ~(ARCH_DMA_MINALIGN - 1);
+ 	uintptr_t end_addr = ALIGN((uintptr_t)addr + size, ARCH_DMA_MINALIGN);
+ 
++	if (!size)
++		return;
+ 	invalidate_dcache_range(start_addr, end_addr);
+ }
+ 

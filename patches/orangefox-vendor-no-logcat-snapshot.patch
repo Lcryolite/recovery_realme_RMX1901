@@ -1,0 +1,17 @@
+diff --git a/FoxExtras/sbin/foxstart.sh b/FoxExtras/sbin/foxstart.sh
+index ec1580e..60f690d 100755
+--- a/FoxExtras/sbin/foxstart.sh
++++ b/FoxExtras/sbin/foxstart.sh
+@@ -598,12 +598,6 @@ extralog "foxstart: completed backup_restore_FS()"
+ dmesg &> /tmp/dmesg.log
+ extralog "foxstart: completed dmesg()"
+ 
+-# get logcat right now
+-if [ -f "/system/bin/logcat" ]; then
+-   logcat -d &> /tmp/logcat.log
+-   extralog "foxstart: completed logcat()"
+-fi
+-
+ #
+ Get_Details
+ extralog "foxstart: completed Get_Details()"

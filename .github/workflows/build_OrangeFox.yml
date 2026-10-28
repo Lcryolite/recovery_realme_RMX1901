@@ -10,15 +10,17 @@ jobs:
     timeout-minutes: 180
     env:
       # kernel_realme_sdm710@c860b90b8531edcb502ecbef5fd8948f299e16ef
-      # with BakaSU@d5e9e025b8b49155f8014684d64c91742b465f65 and the backlight unlock fix.
+      # with BakaSU@d5e9e025b8b49155f8014684d64c91742b465f65, backlight and pstore fixes.
       # Recovery DTBs are preserved; see prebuilt/kernel-provenance.json.
       # Keep the payload and digest pinned together. New combinations need
       # separate device boot validation after the packaging checks below.
-      RECOVERY_KERNEL_SHA256: e328d96cba0ed1f3a4624a9f4ffba43342f5df3e8ff73eea6482f6f7e704c394
-      RECOVERY_8M_KERNEL_SHA256: 82093020d41d697f0b3ee82d9719748100f367a3770873ec338b1a3d2022df4d
+      RECOVERY_KERNEL_SHA256: 2c74ef1d16f4bce8ca1e21290703c725e93ee366f914d880acb0dbf1af581a95
+      RECOVERY_8M_KERNEL_SHA256: b716e01fee71d283cb7a061ed60001dea26b4f4e1445018a3e7ff878348940a7
       RECOVERY_DTBO_SHA256: ce97df9ec60a81200e3d49b0814d862402c0bc929ea529bbd0c134e74ff38cbe
       ORANGEFOX_BUILD_ENV_SHA: 265b1a256e061d9f3ca6e6767c6aa2bce4d9cb1a
       ORANGEFOX_SYNC_SHA: 14eca5f7ef82c9dacfe353db8b93329383c7293f
+      ORANGEFOX_RECOVERY_SHA: 6bd902d14f754ab98a7cccc5598f7b9d135cfc38
+      ORANGEFOX_VENDOR_SHA: fbe4d49c96acace3802c53c12cad0a62903c381f
 
     steps:
     - name: Cleanup runner disk
@@ -84,6 +86,22 @@ jobs:
         path: fox_12.1/device/realme/RMX1901
         persist-credentials: false
 
+    - name: Pin OrangeFox logging sources
+      run: |
+        git -C fox_12.1/bootable/recovery fetch --depth 1 origin "${ORANGEFOX_RECOVERY_SHA}"
+        git -C fox_12.1/bootable/recovery checkout --detach "${ORANGEFOX_RECOVERY_SHA}"
+        git -C fox_12.1/vendor/recovery fetch --depth 1 origin "${ORANGEFOX_VENDOR_SHA}"
+        git -C fox_12.1/vendor/recovery checkout --detach "${ORANGEFOX_VENDOR_SHA}"
+        patch --directory fox_12.1/bootable/recovery --strip 1 --forward --batch --fuzz=0 \
+          < fox_12.1/device/realme/RMX1901/patches/orangefox-recovery-no-userspace-log.patch
+        patch --directory fox_12.1/vendor/recovery --strip 1 --forward --batch --fuzz=0 \
+          < fox_12.1/device/realme/RMX1901/patches/orangefox-vendor-no-logcat-snapshot.patch
+        env -i PATH="$PATH" LANG=C \
+          ORANGEFOX_RECOVERY_SOURCE="${GITHUB_WORKSPACE}/fox_12.1/bootable/recovery" \
+          ORANGEFOX_VENDOR_SOURCE="${GITHUB_WORKSPACE}/fox_12.1/vendor/recovery" \
+          python3 -B -m unittest discover -s fox_12.1/device/realme/RMX1901/tests \
+          -p test_orangefox_logging_policy.py
+
     - name: Enable Zstd ramdisk compression
       run: |
         patch --directory fox_12.1/build/make --strip 1 --forward --batch --fuzz=0 \
@@ -98,6 +116,15 @@ jobs:
           -p test_recovery_image_guard.py
         env -i PATH="$PATH" LANG=C python3 -B -m unittest discover -s fox_12.1/device/realme/RMX1901/tests \
           -p test_sdsp_comparison.py
+
+    - name: Validate Recovery diagnostics
+      run: |
+        for test in test_pstore_snapshot.py test_recovery_diagnostics.py test_uboot_ramoops_probe.py \
+                    test_uboot_usb_console.py test_uboot_console_relay.py test_uboot_console_timeout.py \
+                    test_uboot_logfs_guard.py test_uboot_logfs_slots.py test_uboot_logfs_writer.py; do
+          env -i PATH="$PATH" LANG=C python3 -B -m unittest discover \
+            -s fox_12.1/device/realme/RMX1901/tests -p "$test"
+        done
 
     - name: Validate pinned recovery inputs
       timeout-minutes: 5
@@ -127,7 +154,8 @@ jobs:
           --dtbo fox_12.1/device/realme/RMX1901/prebuilt/dtbo.img \
           --partition-size 67108864 \
           --ramdisk-format zstd \
-          --require-disabled-preinit
+          --require-disabled-preinit \
+          --require-devmem --require-diagnostics
         python3 fox_12.1/external/avb/avbtool.py verify_image \
           --image fox_12.1/out/target/product/RMX1901/recovery.img \
           --key fox_12.1/external/avb/test/data/testkey_rsa4096.pem
@@ -163,6 +191,12 @@ jobs:
           --unpack-bootimg fox_12.1/system/tools/mkbootimg/unpack_bootimg.py \
           --mkbootimg fox_12.1/out/host/linux-x86/bin/mkbootimg \
           --output-dir fox_12.1/out/target/product/RMX1901/recovery-sdsp-8m
+        python3 fox_12.1/device/realme/RMX1901/tools/recovery_image_guard.py image \
+          fox_12.1/out/target/product/RMX1901/recovery-sdsp-8m/recovery.img \
+          --kernel fox_12.1/out/target/product/RMX1901/recovery-sdsp-8m/Image.gz-dtb \
+          --dtbo fox_12.1/device/realme/RMX1901/prebuilt/dtbo.img \
+          --partition-size 67108864 --ramdisk-format zstd \
+          --require-disabled-preinit --require-devmem --require-diagnostics
 
     - name: Upload recovery
       uses: actions/upload-artifact@26f96dfa697d77e81fd5907df203aa23a56210a8 # v4.3.0

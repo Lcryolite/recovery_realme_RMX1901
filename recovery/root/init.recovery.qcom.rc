@@ -44,6 +44,7 @@ on boot
     chmod 0755 /system/bin/abx2xml
     chmod 0755 /system/bin/xml2abx
     start custom-script
+    start rmx1901-diagnostics
 
 on property:ro.boot.prjname=*
     # Asserts for realme UI 2 flash
@@ -55,3 +56,9 @@ service custom-script /system/bin/custom-script.sh
     disabled
     oneshot
     seclabel u:r:recovery:s0    
+
+service rmx1901-diagnostics /system/bin/rmx1901-diagnostics --service
+    user root
+    group root
+    disabled
+    seclabel u:r:recovery:s0

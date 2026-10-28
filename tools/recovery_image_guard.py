@@ -109,18 +109,7 @@ def u64(image: bytes, offset: int) -> int:
     return struct.unpack_from("<Q", image, offset)[0]
 
 
-def validate_ramdisk_support(raw_kernel: bytes, ramdisk: bytes) -> str:
-    if ramdisk.startswith(b"\x1f\x8b"):
-        compression = "gzip"
-    elif ramdisk.startswith(b"\x02\x21\x4c\x18"):
-        compression = "lz4"
-    elif ramdisk.startswith(b"\x28\xb5\x2f\xfd"):
-        compression = "zstd"
-    elif ramdisk.startswith(b"\x5d\x00"):
-        compression = "lzma"
-    else:
-        raise ValidationError("unsupported Recovery ramdisk compression")
-
+def embedded_kernel_config(raw_kernel: bytes) -> set[bytes]:
     try:
         marker = b"IKCFG_ST\x1f\x8b\x08"
         offset = raw_kernel.find(marker)
@@ -133,7 +122,22 @@ def validate_ramdisk_support(raw_kernel: bytes, ramdisk: bytes) -> str:
 
     if not reader.eof or not reader.unused_data.startswith(b"IKCFG_ED"):
         raise ValidationError("embedded kernel configuration is truncated or invalid")
-    enabled = set(config.splitlines())
+    return set(config.splitlines())
+
+
+def validate_ramdisk_support(raw_kernel: bytes, ramdisk: bytes) -> str:
+    if ramdisk.startswith(b"\x1f\x8b"):
+        compression = "gzip"
+    elif ramdisk.startswith(b"\x02\x21\x4c\x18"):
+        compression = "lz4"
+    elif ramdisk.startswith(b"\x28\xb5\x2f\xfd"):
+        compression = "zstd"
+    elif ramdisk.startswith(b"\x5d\x00"):
+        compression = "lzma"
+    else:
+        raise ValidationError("unsupported Recovery ramdisk compression")
+
+    enabled = embedded_kernel_config(raw_kernel)
     suffix = compression.upper().encode()
     required = [
         b"CONFIG_BLK_DEV_INITRD",
@@ -179,12 +183,20 @@ def decompress_ramdisk(ramdisk: bytes, compression: str) -> bytes:
     return result.stdout
 
 
-def validate_ramdisk_applets(cpio: bytes) -> None:
+def validate_ramdisk_applets(cpio: bytes, require_diagnostics: bool = False) -> None:
     required: dict[bytes, tuple[int, bytes] | None] = {
         b"system/bin/toybox": None,
         b"system/bin/printf": None,
         b"system/bin/dmesg": None,
     }
+    if require_diagnostics:
+        required.update({
+            b"system/bin/rmx1901-diagnostics": None,
+            b"system/bin/rmx1901-pstore-snapshot": None,
+            b"init.recovery.qcom.rc": None,
+            b"system/etc/init/hw/init.rc": None,
+            b"ueventd.qcom.rc": None,
+        })
     adb_ready_trigger_owners: list[bytes] = []
     offset = 0
 
@@ -221,6 +233,10 @@ def validate_ramdisk_applets(cpio: bytes) -> None:
         if stat.S_IFMT(mode) == stat.S_IFREG and name.endswith(b".rc"):
             for line in data.splitlines():
                 stripped = line.strip()
+                if (require_diagnostics and not stripped.startswith(b"#") and
+                        any(token.rsplit(b"/", 1)[-1] in (b"recovery-refresh", b"recovery-persist")
+                            for token in stripped.split())):
+                    raise ValidationError("Recovery pmsg refresh or userspace log persistence is enabled")
                 if stripped.startswith(b"on ") and frozenset(
                     condition.strip()
                     for condition in stripped[3:].split(b" && ")
@@ -257,6 +273,26 @@ def validate_ramdisk_applets(cpio: bytes) -> None:
         mode, target = required[name]
         if stat.S_IFMT(mode) != stat.S_IFLNK or target != b"toybox":
             raise ValidationError(f"{name.decode()} must be a symlink to toybox")
+
+    if require_diagnostics:
+        for name in (b"system/bin/rmx1901-diagnostics", b"system/bin/rmx1901-pstore-snapshot"):
+            mode, data = required[name]
+            if stat.S_IFMT(mode) != stat.S_IFREG or not mode & 0o111 or not data.startswith(b"\x7fELF"):
+                raise ValidationError(f"{name.decode()} must be an executable ELF")
+        for name in (b"init.recovery.qcom.rc", b"system/etc/init/hw/init.rc", b"ueventd.qcom.rc"):
+            if stat.S_IFMT(required[name][0]) != stat.S_IFREG:
+                raise ValidationError(f"{name.decode()} must be a regular file")
+        qcom = required[b"init.recovery.qcom.rc"][1]
+        init = required[b"system/etc/init/hw/init.rc"][1]
+        ueventd = required[b"ueventd.qcom.rc"][1]
+        if (b"start rmx1901-diagnostics" not in qcom or
+                b"service rmx1901-diagnostics /system/bin/rmx1901-diagnostics --service" not in qcom):
+            raise ValidationError("Recovery diagnostics service is not configured")
+        if b"symlink /dev/null /tmp/recovery.log" not in init or b"import /init.recovery.logd.rc" in init:
+            raise ValidationError("Recovery userspace logging is not disabled")
+        if not any(line.split() == [b"/dev/mem", b"0600", b"root", b"root"]
+                   for line in ueventd.splitlines()):
+            raise ValidationError("Recovery /dev/mem access is not restricted to root")
 
 
 def validate_abl_workspace(
@@ -302,6 +338,13 @@ def validate_disabled_preinit(image: bytes) -> None:
         raise ValidationError("Recovery must disable BakaSU preinit exactly once")
 
 
+def validate_diagnostics_cmdline(image: bytes) -> None:
+    cmdline = image[64:576].split(b"\0", 1)[0]
+    cmdline += b" " + image[608:1632].split(b"\0", 1)[0]
+    if b"quiet" in cmdline.split():
+        raise ValidationError("Recovery diagnostics require info-level console output")
+
+
 def validate_recovery_image(
     path: Path,
     kernel_path: Path,
@@ -309,6 +352,8 @@ def validate_recovery_image(
     partition_size: int,
     expected_ramdisk_format: str | None = None,
     require_disabled_preinit: bool = False,
+    require_devmem: bool = False,
+    require_diagnostics: bool = False,
 ) -> None:
     image = path.read_bytes()
     kernel = kernel_path.read_bytes()
@@ -338,6 +383,8 @@ def validate_recovery_image(
         )
     if require_disabled_preinit:
         validate_disabled_preinit(image)
+    if require_diagnostics:
+        validate_diagnostics_cmdline(image)
 
     kernel_offset = page_size
     ramdisk_offset = align(kernel_offset + kernel_size, page_size)
@@ -365,6 +412,12 @@ def validate_recovery_image(
         raw_kernel = zlib.decompress(kernel, 31)
     except zlib.error as error:
         raise ValidationError(f"kernel gzip stream is invalid: {error}") from error
+    if require_devmem:
+        enabled = embedded_kernel_config(raw_kernel)
+        if b"CONFIG_DEVMEM=y" not in enabled:
+            raise ValidationError("Recovery requires CONFIG_DEVMEM=y")
+        if b"CONFIG_STRICT_DEVMEM=y" in enabled:
+            raise ValidationError("Recovery must disable CONFIG_STRICT_DEVMEM")
     compression = validate_ramdisk_support(
         raw_kernel, image[ramdisk_offset : ramdisk_offset + ramdisk_size]
     )
@@ -373,7 +426,7 @@ def validate_recovery_image(
             f"recovery ramdisk format is {compression}, expected {expected_ramdisk_format}"
         )
     ramdisk = image[ramdisk_offset : ramdisk_offset + ramdisk_size]
-    validate_ramdisk_applets(decompress_ramdisk(ramdisk, compression))
+    validate_ramdisk_applets(decompress_ramdisk(ramdisk, compression), require_diagnostics)
     runtime_size, workspace = validate_abl_workspace(
         raw_kernel, kernel_size, ramdisk_size, page_size
     )
@@ -402,6 +455,8 @@ def parser() -> argparse.ArgumentParser:
         "--ramdisk-format", choices=("gzip", "lz4", "lzma", "zstd")
     )
     image_parser.add_argument("--require-disabled-preinit", action="store_true")
+    image_parser.add_argument("--require-devmem", action="store_true")
+    image_parser.add_argument("--require-diagnostics", action="store_true")
     return command_parser
 
 
@@ -414,6 +469,8 @@ def main() -> int:
             validate_recovery_image(
                 args.path, args.kernel, args.dtbo, args.partition_size, args.ramdisk_format,
                 require_disabled_preinit=args.require_disabled_preinit,
+                require_devmem=args.require_devmem,
+                require_diagnostics=args.require_diagnostics,
             )
     except (OSError, ValidationError) as error:
         print(f"recovery image validation failed: {error}", file=sys.stderr)

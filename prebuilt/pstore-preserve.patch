@@ -1,0 +1,142 @@
+diff --git a/arch/arm64/kernel/head.S b/arch/arm64/kernel/head.S
+index fcf7b22..08fe975 100644
+--- a/arch/arm64/kernel/head.S
++++ b/arch/arm64/kernel/head.S
+@@ -220,9 +220,6 @@ efi_header_end:
+ 	 */
+ ENTRY(stext)
+ 	bl	preserve_boot_args
+-#ifdef CONFIG_PRODUCT_REALME_SDM710
+-	bl	rmxdiag_early_ramoops_mark
+-#endif
+ 	bl	el2_setup			// Drop to EL1, w0=cpu_boot_mode
+ 	adrp	x23, __PHYS_OFFSET
+ 	and	x23, x23, MIN_KIMG_ALIGN - 1	// KASLR offset, defaults to 0
+@@ -255,36 +252,6 @@ preserve_boot_args:
+ 	b	__inval_cache_range		// tail call
+ ENDPROC(preserve_boot_args)
+ 
+-#ifdef CONFIG_PRODUCT_REALME_SDM710
+-/*
+- * Leave a valid ramoops console record before the MMU and normal printk
+- * infrastructure exist. Recovery uses the same reserved-memory layout.
+- * Only caller-scratch registers are used; x21 keeps the FDT pointer.
+- */
+-rmxdiag_early_ramoops_mark:
+-	movz	x9, #0x0000
+-	movk	x9, #0xb7f4, lsl #16		// console zone at 0xb7f40000
+-	movz	w10, #0x4244
+-	movk	w10, #0x4347, lsl #16		// persistent RAM signature
+-	str	w10, [x9]
+-	mov	w10, #36
+-	str	w10, [x9, #4]			// ring start
+-	str	w10, [x9, #8]			// ring size
+-	adr	x11, rmxdiag_early_ramoops_text
+-	add	x12, x9, #12
+-1:
+-	ldrb	w13, [x11], #1
+-	strb	w13, [x12], #1
+-	subs	w10, w10, #1
+-	b.ne	1b
+-	dsb	sy
+-	ret
+-
+-rmxdiag_early_ramoops_text:
+-	.ascii	"RMXDIAG: arm64 kernel entry reached\n"
+-rmxdiag_early_ramoops_text_end:
+-#endif
+-
+ /*
+  * Macro to create a table entry to the next page.
+  *
+diff --git a/init/main.c b/init/main.c
+index f564407..45d4b83 100644
+--- a/init/main.c
++++ b/init/main.c
+@@ -87,46 +87,13 @@
+ #include <asm/bugs.h>
+ #include <asm/setup.h>
+ #include <asm/sections.h>
+-#include <asm/cacheflush.h>
+ 
+ static int kernel_init(void *);
+ 
+-#define RMXDIAG_RAMOOPS_CONSOLE_PHYS 0xb7f40000ULL
+-#define RMXDIAG_RAMOOPS_CONSOLE_SIZE 0x40000U
+-#define RMXDIAG_PERSISTENT_RAM_SIG 0x43474244U
+-
+-struct rmxdiag_persistent_ram_buffer {
+-	u32 sig;
+-	u32 start;
+-	u32 size;
+-	u8 data[0];
+-};
+-
+-static void __init rmxdiag_ramoops_checkpoint(const char *text)
++static void __init rmxdiag_checkpoint(const char *text)
+ {
+-	struct rmxdiag_persistent_ram_buffer *buffer;
+-	size_t capacity = RMXDIAG_RAMOOPS_CONSOLE_SIZE - sizeof(*buffer);
+-	size_t length = strlen(text);
+-	u32 size;
+-
+-	if (!IS_ENABLED(CONFIG_PRODUCT_REALME_SDM710))
+-		return;
+-
+-	buffer = phys_to_virt(RMXDIAG_RAMOOPS_CONSOLE_PHYS);
+-	size = READ_ONCE(buffer->size);
+-	if (READ_ONCE(buffer->sig) != RMXDIAG_PERSISTENT_RAM_SIG ||
+-	    size > capacity || READ_ONCE(buffer->start) > size) {
+-		WRITE_ONCE(buffer->sig, RMXDIAG_PERSISTENT_RAM_SIG);
+-		size = 0;
+-	}
+-
+-	if (length > capacity - size)
+-		length = capacity - size;
+-	memcpy(buffer->data + size, text, length);
+-	size += length;
+-	WRITE_ONCE(buffer->start, size);
+-	WRITE_ONCE(buffer->size, size);
+-	__flush_dcache_area(buffer, sizeof(*buffer) + size);
++	if (IS_ENABLED(CONFIG_PRODUCT_REALME_SDM710))
++		pr_info("%s", text);
+ }
+ 
+ extern void init_IRQ(void);
+@@ -552,7 +519,7 @@ asmlinkage __visible void __init start_kernel(void)
+ 	page_address_init();
+ 	pr_notice("%s", linux_banner);
+ 	setup_arch(&command_line);
+-	rmxdiag_ramoops_checkpoint("RMXDIAG: setup_arch completed\n");
++	rmxdiag_checkpoint("RMXDIAG: setup_arch completed\n");
+ 	mm_init_cpumask(&init_mm);
+ 	setup_command_line(command_line);
+ 	setup_nr_cpu_ids();
+@@ -585,7 +552,7 @@ asmlinkage __visible void __init start_kernel(void)
+ 	sort_main_extable();
+ 	trap_init();
+ 	mm_init();
+-	rmxdiag_ramoops_checkpoint("RMXDIAG: mm_init completed\n");
++	rmxdiag_checkpoint("RMXDIAG: mm_init completed\n");
+ 
+ 	/*
+ 	 * Set up the scheduler prior starting any interrupts (such as the
+@@ -655,7 +622,7 @@ asmlinkage __visible void __init start_kernel(void)
+ 	 * this. But we do want output early, in case something goes wrong.
+ 	 */
+ 	console_init();
+-	rmxdiag_ramoops_checkpoint("RMXDIAG: console_init completed\n");
++	rmxdiag_checkpoint("RMXDIAG: console_init completed\n");
+ 	if (panic_later)
+ 		panic("Too many boot %s vars at `%s'", panic_later,
+ 		      panic_param);
+@@ -727,7 +694,7 @@ asmlinkage __visible void __init start_kernel(void)
+ 	}
+ 
+ 	ftrace_init();
+-	rmxdiag_ramoops_checkpoint("RMXDIAG: start_kernel reached rest_init\n");
++	rmxdiag_checkpoint("RMXDIAG: start_kernel reached rest_init\n");
+ 
+ 	/* Do the rest non-__init'ed, we're now alive */
+ 	rest_init();
+

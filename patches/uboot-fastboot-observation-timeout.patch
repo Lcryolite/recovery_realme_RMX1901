@@ -1,0 +1,65 @@
+--- a/cmd/fastboot.c
++++ b/cmd/fastboot.c
+@@ -8,13 +8,16 @@
+  */
+ #include <command.h>
+ #include <console.h>
++#include <env.h>
+ #include <g_dnl.h>
+ #include <fastboot.h>
+ #include <hang.h>
+ #include <net.h>
+ #include <usb.h>
++#include <time.h>
+ #include <watchdog.h>
+ #include <linux/printk.h>
++#include <linux/string.h>
+ #include <linux/stringify.h>
+ 
+ #if CONFIG_IS_ENABLED(NET_LEGACY)
+@@ -66,6 +69,9 @@
+ 	char *usb_controller;
+ 	struct udevice *udc;
+ 	char *endp;
++	const char *wait = env_get("rmxdiag.usb_wait");
++	bool diagnostic_wait = wait && !strcmp(wait, "1");
++	unsigned long started = 0;
+ 	int ret;
+ 
+ 	if (!IS_ENABLED(CONFIG_USB_FUNCTION_FASTBOOT)) {
+@@ -101,7 +107,14 @@
+ 		goto exit;
+ 	}
+ 
++	if (diagnostic_wait)
++		started = get_timer(0);
++
+ 	while (1) {
++		if (diagnostic_wait && get_timer(started) >= 10000) {
++			puts("RMX1901 USB console diagnostic wait expired\n");
++			break;
++		}
+ 		if (g_dnl_detach())
+ 			break;
+ 		if (ctrlc())
+@@ -125,6 +138,8 @@
+ {
+ 	uintptr_t buf_addr = (uintptr_t)NULL;
+ 	size_t buf_size = 0;
++	const char *wait;
++	int ret;
+ 
+ 	if (argc < 2)
+ 		return CMD_RET_USAGE;
+@@ -174,7 +189,10 @@
+ 		argc--;
+ 	}
+ 
+-	do_fastboot_usb(argc, argv, buf_addr, buf_size);
++	ret = do_fastboot_usb(argc, argv, buf_addr, buf_size);
++	wait = env_get("rmxdiag.usb_wait");
++	if (wait && !strcmp(wait, "1"))
++		return ret;
+ 	/* Never fall through to EFI capsule processing or the interactive CLI. */
+ 	hang();
+ 	return CMD_RET_FAILURE;

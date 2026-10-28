@@ -48,6 +48,7 @@ firmware_directories /mnt/vendor/persist/ /vendor/firmware_mnt/image/
 /dev/kgsl-2d1             0666   root       root
 /dev/ion                  0664   system     system
 /dev/membuf               0664   system     system
+/dev/mem                  0600   root       root
 /dev/rtc0                 0660   system     system
 /dev/smd0                 0660   system     system
 /dev/smd4                 0660   system     system

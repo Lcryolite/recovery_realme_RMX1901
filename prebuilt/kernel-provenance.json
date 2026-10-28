@@ -11,14 +11,18 @@
     "patch_sha256": "a997f6efe4a38db8303513964d84f83732339fcfbe9f54ec741d7f82c3c17177",
     "patched_file": "drivers/gpu/drm/msm/sde/sde_connector.c",
     "patched_file_sha256": "35a9390936d9cf542cf31360a450f3d66fd9389004ad44cf489817f8b7c27b83",
-    "only_tracked_source_change": "Release bd->update_lock before the delayed-first-frame early return under CONFIG_PRODUCT_REALME_SDM710.",
+    "backlight_change": "Release bd->update_lock before the delayed-first-frame early return under CONFIG_PRODUCT_REALME_SDM710.",
+    "pstore_patch": "pstore-preserve.patch",
+    "pstore_patch_sha256": "88fad8724291fb762349a56d3cf8f24c18f312d060514ed9c4677b3d7e0ce07b",
+    "pstore_change": "Remove direct writes to the previous ramoops console and use printk for later initialization checkpoints; the earliest entry marker is unavailable.",
     "source_rebuild_plan_accepted_by_owner": "2026-10-27",
     "immutable_published_binary": false
   },
   "build": {
-    "recipe": "Isolated make build from the supplied embedded configuration, using the recorded Neutron toolchain and the minimal backlight patch.",
-    "config_sha256": "d80dbd46bebfbb6ed58a59b3cee88e79fb9da45575aac5faf176ec4f9c03a8ae",
-    "config_text_identical_to_supplied_ikconfig": true,
+    "recipe": "Isolated make build from the supplied embedded configuration with CONFIG_DEVMEM enabled, using the recorded Neutron toolchain, backlight patch and pstore preservation patch.",
+    "config_sha256": "1a72420c32c570bb47445c9f1217a37c2b39e809f2fff1ae2430f2acd270237c",
+    "config_text_identical_to_supplied_ikconfig": false,
+    "config_delta": ["CONFIG_DEVMEM=y"],
     "llvm_commit": "17efc66a340e35ae03a18e34e7f267832fff7940",
     "clang_version": "24.0.0git",
     "clang_binary_sha256": "6c6a9021fca12564c5e0a0794103c8da79a37146982e3fd39abe062e75792ba2",
@@ -36,34 +40,44 @@
     "thin_lto": false,
     "build_release": "4.9.337-LineageOS+",
     "completed_kernel_compilations": 1,
-    "local_build_evidence": "artifacts/kernel-zstd-c860-unlock/",
+    "local_build_evidence": "artifacts/recovery-diagnostics-20261028/",
     "reproduction_limits": [
-      "The build ran in an isolated worktree with the supplied configuration; no second complete compilation has been performed.",
+      "The build ran in an isolated copy with the documented configuration change; no second complete compilation has been performed.",
       "The supplied binary and rebuilt binary have different identities; byte-identical reproduction of the supplied binary is not claimed."
     ]
   },
   "payload": {
     "filename": "Image.gz-dtb",
-    "size_bytes": 16408302,
-    "sha256": "e328d96cba0ed1f3a4624a9f4ffba43342f5df3e8ff73eea6482f6f7e704c394",
-    "gzip_size_bytes": 14900819,
-    "gzip_sha256": "c9a501f3ddb6d58b7b66f1cee9a4c4b26181b04516208ee3ca7ef9a233d0385a",
+    "size_bytes": 16411272,
+    "sha256": "2c74ef1d16f4bce8ca1e21290703c725e93ee366f914d880acb0dbf1af581a95",
+    "gzip_size_bytes": 14903789,
+    "gzip_sha256": "f9a57ce0a5292c7b68200f65b341ce56f2cb21b0174426520f99856885c689b7",
     "raw_size_bytes": 43917344,
-    "raw_sha256": "e9b59f73ec466dd03f6b25fc1e87dc76f13049c62dd7baf0e13bace12bdd2251",
+    "raw_sha256": "0d213b531d55df58acb8376658a398ed546707ad62cae995b584bf8600dbe361",
     "arm64_runtime_size_bytes": 50126848,
     "preserved_dtb_project_order": [18041, 18621, 19691, 19651],
     "preserved_dtb_size_bytes": 1507483,
     "preserved_dtb_sha256": "122aca1178a4971baa9af1e5c39cae2235b57fe89ac64cb341d9e0cdd41827f6",
     "comparison_sdsp_region_size_bytes": 8388608,
-    "comparison_kernel_sha256": "82093020d41d697f0b3ee82d9719748100f367a3770873ec338b1a3d2022df4d",
+    "comparison_kernel_sha256": "b716e01fee71d283cb7a061ed60001dea26b4f4e1445018a3e7ff878348940a7",
     "comparison_dtb_origin": "The four DTBs built from the recorded source and configuration; each differs from its preserved Recovery DTB only in the sdsp_region size.",
     "preserved_dtbo_size_bytes": 8845022,
     "preserved_dtbo_sha256": "ce97df9ec60a81200e3d49b0814d862402c0bc929ea529bbd0c134e74ff38cbe"
   },
   "device_acceptance": {
     "hardware": "owner RMX1901, Synaptics S3706 / OFILM",
-    "current_kernel_and_zstd_ramdisk": "owner_confirmed_pass_with_kernelsu.preinit=0",
-    "default_4m": {
+    "previous_kernel_and_zstd_ramdisk": "owner_confirmed_pass_with_kernelsu.preinit=0",
+    "diagnostics_4m": {
+      "image_sha256": "9fe0dd0b982fec1e1a28696e686d28aa2316da4b8a9e9e02fbf43bd3f9572822",
+      "image_origin": "accepted 26c7 Recovery repacked with the rebuilt kernel, /dev/mem ueventd rule and no quiet parameter",
+      "ui_touch_and_storage_browsing": "owner_confirmed_pass",
+      "adb": "verified",
+      "devmem": "root-owned 0600, read/write and mmap passed on a pinned test page; open failed after CAP_SYS_RAWIO was dropped",
+      "selinux": "permissive",
+      "pstore_fastboot_console_marker": "not recovered; the stage at which it was lost is unverified",
+      "startup_time": "owner estimated approximately 20 seconds from fastboot confirmation to interactive Recovery"
+    },
+    "previous_default_4m": {
       "image_sha256": "054e4833c2ebdc3b091b2b39d566a9c32f91d8a704c3705e0951d2e732fb4420",
       "image_origin": "CI candidate repacked with kernelsu.preinit=0",
       "sdsp_region_size_bytes": 4194304,
@@ -72,7 +86,7 @@
       "owner_reported_entry_to_interactive_ui": "approximately 20 seconds",
       "adb_first_observed_at_kernel_uptime_seconds": 16.64
     },
-    "comparison_8m": {
+    "previous_comparison_8m": {
       "image_sha256": "693fd09f32f596aef77a8835fcd24ebbd758b4bc269b0454d30907fc26a48c52",
       "image_origin": "SDSP comparison generated from the tested 4 MiB candidate",
       "sdsp_region_size_bytes": 8388608,
@@ -83,10 +97,10 @@
     },
     "preinit_configuration": "disabled in the tested Recovery images",
     "other_device_variants": "unverified",
-    "fallback_image_sha256": "b161380bd0a24fd85f7ba9af550802a6197a9395b162db042e8633b23c1cf7c6",
+    "fallback_image_sha256": "26c7dda466a458faa8ac6b241f62853f27ee0ef0470438ced290e9722d9e7fa8",
     "fallback_ui_and_touch": "owner_confirmed_pass",
-    "fallback_entry_to_interactive_ui_seconds": 21,
-    "fallback_local_evidence": "artifacts/rmx1901-stock-next-source-unlock-20261027/CLOSEOUT.md",
+    "fallback_entry_to_interactive_ui_seconds": "not separately remeasured during this diagnostics task",
+    "fallback_local_evidence": "artifacts/boot-performance-20261028/",
     "rom_compatibility_and_decryption": "outside_acceptance_scope"
   }
 }

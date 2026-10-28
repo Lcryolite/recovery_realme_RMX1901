@@ -1,0 +1,318 @@
+--- a/arch/arm/mach-snapdragon/Kconfig
++++ b/arch/arm/mach-snapdragon/Kconfig
+@@ -7,6 +7,39 @@
+ 	help
+ 	  Expose only the validity and marker status of the existing RMX1901
+ 	  ramoops console to the diagnostic USB console. Never write the arena.
++
++config RMX1901_UFS_READONLY_PROBE
++	bool "Read-only RMX1901 UFS and logfs diagnostic"
++	depends on CMD_FASTBOOT && UFS_QCOM && FS_FAT
++	default n
++	help
++	  Probe the RMX1901 UFS link, GPT and logfs FAT header without writing
++	  storage. This is a diagnostic profile, not a normal boot configuration.
++
++config RMX1901_LOGFS_WRITE_TEST
++	bool "RMX1901 logfs retention diagnostic"
++	depends on RMX1901_UFS_READONLY_PROBE && RMX1901_FAT_EXCLUSIVE_TEST && CONSOLE_RECORD
++	default n
++	help
++	  Keep up to three marked diagnostic files on the exact verified logfs
++	  partition. Unknown files stop writes. This modifies FAT metadata and
++	  requires separate device authorization.
++
++config RMX1901_LOGFS_ONESHOT_03
++	bool "Limit logfs diagnostic to one new RMXLOG03.LOG"
++	depends on RMX1901_LOGFS_WRITE_TEST && !RMX1901_LOGFS_ONESHOT_01
++	default n
++	help
++	  Refuse all writes unless the third slot is absent and selected. This
++	  restricts a single device experiment, including on repeated boots.
++
++config RMX1901_LOGFS_ONESHOT_01
++	bool "Limit logfs diagnostic to one legacy slot 1 replacement"
++	depends on RMX1901_LOGFS_WRITE_TEST
++	default n
++	help
++	  Refuse writes unless the first legacy slot is selected for replacement.
++	  A repeated boot cannot write a second record.
+ 
+ config SYS_SOC
+ 	default "snapdragon"
+--- a/cmd/fastboot.c
++++ b/cmd/fastboot.c
+@@ -8,12 +8,31 @@
+  */
+ #include <command.h>
+ #include <console.h>
++#if defined(CONFIG_RMX1901_UFS_READONLY_PROBE)
++#include <dm.h>
++#endif
+ #include <env.h>
+ #include <g_dnl.h>
+ #include <fastboot.h>
+ #include <hang.h>
+ #include <net.h>
+ #include <usb.h>
++#if defined(CONFIG_RMX1901_UFS_READONLY_PROBE)
++#include <blk.h>
++#include <fs.h>
++#include <part.h>
++#include <scsi.h>
++#endif
++#if defined(CONFIG_RMX1901_LOGFS_WRITE_TEST)
++#include <asm/cache.h>
++#include <asm/global_data.h>
++#include <linux/dma-direction.h>
++#include <malloc.h>
++#include <membuf.h>
++#include <rmx1901_logfs_guard.h>
++#include <uboot_logfs_slots.h>
++DECLARE_GLOBAL_DATA_PTR;
++#endif
+ #include <time.h>
+ #include <watchdog.h>
+ #include <linux/printk.h>
+@@ -22,6 +41,10 @@
+ #if defined(CONFIG_RMX1901_RAMOOPS_DIAG)
+ #include <rmx1901_ramoops_probe.h>
+ bool rmx1901_ramoops_probe_mapped(void);
++#endif
++
++#if defined(CONFIG_RMX1901_LOGFS_WRITE_TEST)
++#include <uboot_logfs_writer.h>
+ #endif
+ 
+ #if CONFIG_IS_ENABLED(NET_LEGACY)
+@@ -104,6 +127,65 @@
+ 	if (ret)
+ 		return ret;
+ 
++#if defined(CONFIG_RMX1901_UFS_READONLY_PROBE)
++	/* Probe UFS read-only; the separately enabled logfs diagnostic may write. */
++	{
++		struct udevice *disk = NULL;
++		int scan = scsi_scan(false);
++		int found = blk_get_device(UCLASS_SCSI, 0, &disk);
++		printf("RMX1901_UFS_READONLY_PROBE scan=%d first=%d\n", scan, found);
++		if (!scan) {
++			int matches = 0;
++#if defined(CONFIG_RMX1901_LOGFS_WRITE_TEST)
++			struct udevice *chosen_disk = NULL;
++			struct disk_partition chosen_part = { 0 };
++			int chosen_device = -1, chosen_number = -1, chosen_fat = 0;
++			unsigned int chosen_target = 255, chosen_lun = 255;
++#endif
++			for (int device = 0; device < 8; device++) {
++				struct disk_partition part;
++				struct blk_desc *desc;
++				int number, ret, fat;
++				if (blk_get_device(UCLASS_SCSI, device, &disk))
++					continue;
++				desc = dev_get_uclass_plat(disk);
++				number = part_get_info_by_name(desc, "logfs", &part);
++				if (number < 1)
++					continue;
++				ret = fs_set_blk_dev_with_part(desc, number);
++				fat = !ret && fs_get_type() == FS_TYPE_FAT;
++				if (!ret)
++					fs_close();
++				matches++;
++#if defined(CONFIG_RMX1901_LOGFS_WRITE_TEST)
++				chosen_disk = disk;
++				chosen_part = part;
++				chosen_device = device;
++				chosen_number = number;
++				chosen_fat = fat;
++				chosen_target = desc->target;
++				chosen_lun = desc->lun;
++#endif
++				printf("RMX1901_LOGFS_READONLY device=%d part=%d start=%llu blocks=%llu blocksize=%lu fat=%d\n",
++				       device, number, (unsigned long long)part.start,
++				       (unsigned long long)part.size, part.blksz, fat);
++			}
++			printf("RMX1901_LOGFS_READONLY matches=%d\n", matches);
++#if defined(CONFIG_RMX1901_LOGFS_WRITE_TEST)
++			if (rmx1901_logfs_target_valid(matches, chosen_device, chosen_number,
++						       chosen_target, chosen_lun,
++						       chosen_part.start, chosen_part.size,
++						       chosen_part.blksz, chosen_fat)) {
++				int status = rmx1901_logfs_test_write(chosen_disk, chosen_number);
++				printf("RMXLOGFS_WRITE status=%d\n", status);
++			} else {
++				puts("RMXLOGFS_WRITE target_mismatch\n");
++			}
++#endif
++		}
++	}
++#endif
++
+ #if defined(CONFIG_RMX1901_RAMOOPS_DIAG)
+ 	if (rmx1901_ramoops_probe_mapped()) {
+ 		const volatile struct rmx1901_persistent_buffer *buffer =
+--- a/drivers/phy/qcom/phy-qcom-qmp-ufs.c
++++ b/drivers/phy/qcom/phy-qcom-qmp-ufs.c
+@@ -1097,6 +1097,33 @@
+ 	.no_pcs_sw_reset	= true,
+ };
+ 
++#if defined(CONFIG_RMX1901_UFS_READONLY_PROBE)
++static const struct qmp_ufs_cfg rmx1901_ufsphy_cfg = {
++	.lanes			= 1,
++	.offsets		= &qmp_ufs_offsets,
++	.tbls = {
++		.serdes		= sdm845_ufsphy_serdes,
++		.serdes_num	= ARRAY_SIZE(sdm845_ufsphy_serdes),
++		.tx		= sdm845_ufsphy_tx,
++		.tx_num		= ARRAY_SIZE(sdm845_ufsphy_tx),
++		.rx		= sdm845_ufsphy_rx,
++		.rx_num		= ARRAY_SIZE(sdm845_ufsphy_rx),
++		.pcs		= sdm845_ufsphy_pcs,
++		.pcs_num	= ARRAY_SIZE(sdm845_ufsphy_pcs),
++	},
++	.tbls_hs_b = {
++		.serdes		= sdm845_ufsphy_hs_b_serdes,
++		.serdes_num	= ARRAY_SIZE(sdm845_ufsphy_hs_b_serdes),
++	},
++	.clk_list		= sdm845_ufs_phy_clk_l,
++	.num_clks		= ARRAY_SIZE(sdm845_ufs_phy_clk_l),
++	.vreg_list		= qmp_ufs_vreg_l,
++	.num_vregs		= ARRAY_SIZE(qmp_ufs_vreg_l),
++	.regs			= ufsphy_v3_regs_layout,
++	.no_pcs_sw_reset	= true,
++};
++#endif
++
+ static const struct qmp_ufs_cfg sm8150_ufsphy_cfg = {
+ 	.lanes			= 2,
+ 
+@@ -1741,6 +1768,9 @@
+ 	{ .compatible = "qcom,milos-qmp-ufs-phy", .data = (ulong)&milos_ufsphy_cfg, },
+ 	{ .compatible = "qcom,sa8775p-qmp-ufs-phy", .data = (ulong)&sa8775p_ufsphy_cfg, },
+ 	{ .compatible = "qcom,sdm845-qmp-ufs-phy", .data = (ulong)&sdm845_ufsphy_cfg },
++#if defined(CONFIG_RMX1901_UFS_READONLY_PROBE)
++	{ .compatible = "qcom,sdm670-qmp-ufs-phy", .data = (ulong)&rmx1901_ufsphy_cfg },
++#endif
+ 	{ .compatible = "qcom,sm6350-qmp-ufs-phy", .data = (ulong)&sdm845_ufsphy_cfg },
+ 	{ .compatible = "qcom,sm7150-qmp-ufs-phy", .data = (ulong)&sm7150_ufsphy_cfg },
+ 	{ .compatible = "qcom,sm8150-qmp-ufs-phy", .data = (ulong)&sm8150_ufsphy_cfg },
+--- a/drivers/ufs/ufs-qcom.c
++++ b/drivers/ufs/ufs-qcom.c
+@@ -289,7 +289,9 @@
+ 
+ 	switch (status) {
+ 	case PRE_CHANGE:
+-		ufs_qcom_power_up_sequence(hba);
++		err = ufs_qcom_power_up_sequence(hba);
++		if (err)
++			return err;
+ 		/*
+ 		 * The PHY PLL output is the source of tx/rx lane symbol
+ 		 * clocks, hence, enable the lane clocks only after PHY
+--- a/dts/upstream/src/arm64/qcom/sdm710-realme-rmx1901-usb-console.dts
++++ b/dts/upstream/src/arm64/qcom/sdm710-realme-rmx1901-usb-console.dts
+@@ -9,7 +9,7 @@
+ 
+ /dts-v1/;
+ 
+-#include "sdm670.dtsi"
++#include "sdm710.dtsi"
+ 
+ / {
+ 	model = "Qualcomm Technologies, Inc. SDM710 PM660 + PM660A MTP";
+@@ -42,9 +42,35 @@
+ 	status = "okay";
+ };
+ 
++&ufs_mem_hc {
++	status = "okay";
++	lanes-per-direction = <1>;
++	clock-names = "core_clk", "bus_aggr_clk", "iface_clk", "core_clk_unipro",
++		      "ref_clk", "tx_lane0_sync_clk", "rx_lane0_sync_clk", "ice_core_clk";
++	clocks = <&gcc GCC_UFS_PHY_AXI_CLK>, <&gcc GCC_AGGRE_UFS_PHY_AXI_CLK>,
++		 <&gcc GCC_UFS_PHY_AHB_CLK>, <&gcc GCC_UFS_PHY_UNIPRO_CORE_CLK>,
++		 <&rpmhcc RPMH_CXO_CLK>, <&gcc GCC_UFS_PHY_TX_SYMBOL_0_CLK>,
++		 <&gcc GCC_UFS_PHY_RX_SYMBOL_0_CLK>, <&gcc GCC_UFS_PHY_ICE_CORE_CLK>;
++};
++
++&ufs_mem_phy {
++	status = "okay";
++	compatible = "qcom,sdm670-qmp-ufs-phy";
++	lanes-per-direction = <1>;
++};
++
++&ufs_opp_table {
++	opp-50000000 {
++		opp-hz = /bits/ 64 <50000000>, <0>, <0>, <37500000>, <0>, <0>, <0>, <75000000>;
++	};
++	opp-200000000 {
++		opp-hz = /bits/ 64 <200000000>, <0>, <0>, <150000000>, <0>, <0>, <0>, <300000000>;
++	};
++};
++
+ /*
+  * Deliberately absent:
+- * - framebuffer/display and storage nodes;
++ * - framebuffer/display nodes;
+  * - PM660/PM660L regulator claims unsupported by this U-Boot revision;
+  * - guessed Type-C/VBUS controls or board-specific PHY trim;
+  * - a qcom,pshold node: that driver ignores warm/cold and drops PS_HOLD.
+--- a/fs/fat/fat_write.c
++++ b/fs/fat/fat_write.c
+@@ -20,10 +20,25 @@
+ #include <dm/uclass.h>
+ #include <linux/ctype.h>
+ #include <linux/math64.h>
++#if defined(CONFIG_RMX1901_FAT_EXCLUSIVE_TEST)
++#include <uboot_logfs_slots.h>
++#endif
+ #include "fat.c"
+ 
+ static dir_entry *find_directory_entry(fat_itr *itr, char *filename);
+ static int new_dir_table(fat_itr *itr);
++
++#if defined(CONFIG_RMX1901_FAT_EXCLUSIVE_TEST)
++static const char *rmx_logfs_replacement;
++
++void rmx_logfs_allow_replace(const char *name)
++{
++	if (name && strcmp(name, "RMXLOG01.LOG") && strcmp(name, "RMXLOG02.LOG") &&
++	    strcmp(name, "RMXLOG03.LOG"))
++		name = NULL;
++	rmx_logfs_replacement = name;
++}
++#endif
+ 
+ /* Characters that may only be used in long file names */
+ static const char LONG_ONLY_CHARS[] = "+,;=[]";
+@@ -1519,6 +1534,12 @@
+ 	retdent = find_directory_entry(itr, l_filename);
+ 
+ 	if (retdent) {
++#if defined(CONFIG_RMX1901_FAT_EXCLUSIVE_TEST)
++		if (!rmx_logfs_replacement || strcmp(filename, rmx_logfs_replacement)) {
++			ret = -EEXIST;
++			goto exit;
++		}
++#endif
+ 		if (fat_itr_isdir(itr)) {
+ 			ret = -EISDIR;
+ 			goto exit;
+--- a/fs/fat/Kconfig
++++ b/fs/fat/Kconfig
+@@ -12,6 +12,14 @@
+ 	help
+ 	  This provides support for creating and writing new files to an
+ 	  existing FAT filesystem partition.
++
++config RMX1901_FAT_EXCLUSIVE_TEST
++	bool "Allow only new FAT files in the RMX1901 diagnostic"
++	depends on FAT_WRITE
++	default n
++	help
++	  Refuse any write that would replace or append to an existing file.
++	  This limits a one-shot storage diagnostic; it is not a normal mode.
+ 
+ config FAT_RENAME
+ 	bool "Enable filesystem rename support"

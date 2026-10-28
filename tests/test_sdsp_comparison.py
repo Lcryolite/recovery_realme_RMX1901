@@ -9,7 +9,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import create_sdsp_8m_candidate as comparison
 import recovery_image_guard as guard
 
-COMPARISON_SHA256 = "82093020d41d697f0b3ee82d9719748100f367a3770873ec338b1a3d2022df4d"
+COMPARISON_SHA256 = "b716e01fee71d283cb7a061ed60001dea26b4f4e1445018a3e7ff878348940a7"
 
 
 class SdspComparisonTest(unittest.TestCase):
