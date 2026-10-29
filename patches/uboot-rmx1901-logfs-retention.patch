@@ -1,9 +1,9 @@
 --- a/arch/arm/mach-snapdragon/Kconfig
 +++ b/arch/arm/mach-snapdragon/Kconfig
-@@ -7,6 +7,39 @@
- 	help
+@@ -8,6 +8,39 @@
  	  Expose only the validity and marker status of the existing RMX1901
- 	  ramoops console to the diagnostic USB console. Never write the arena.
+ 	  ramoops console and crash slots to the diagnostic USB console.
+ 	  Never write the arena. Compressed crash payloads are not decoded.
 +
 +config RMX1901_UFS_READONLY_PROBE
 +	bool "Read-only RMX1901 UFS and logfs diagnostic"

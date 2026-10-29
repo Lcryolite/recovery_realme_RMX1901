@@ -128,6 +128,17 @@ renaming `uboot_logfs_guard.h` to `rmx1901_logfs_guard.h`. The source tree has
 no verified upstream revision; applying the patches to a different tree
 requires a fresh review.
 
+The read-only ramoops probe can also be built without the UFS or logfs
+patches. It reports the signature, ring position, length and raw marker match
+for each of the five crash slots and the console, after the mapping guard
+accepts the existing arena. It neither writes the arena nor exports the raw
+record contents. Invalid or empty headers produce `raw_marker=-1`; `0` means
+only that the raw bytes did not match. Compressed crash payloads are not
+decoded, so an absent raw marker does not prove a missing crash record.
+This profile is intended to inspect memory on arrival at U-Boot, before an
+additional forced reset. Its USB observation is host-assisted evidence, not
+proof that a record will survive the later fastboot-to-Recovery path.
+
 The retention diagnostic requires the RMX1901 UFS/SCSI and FAT options,
 console recording, `CONFIG_RMX1901_UFS_READONLY_PROBE`,
 `CONFIG_RMX1901_FAT_EXCLUSIVE_TEST` and
@@ -239,6 +250,12 @@ the owner confirmed a long button press to leave U-Boot. This test therefore
 included a forced reset; it does not isolate fastboot alone or a warm-only
 reset path. A future test needs to inspect records before that forced reset,
 or separately establish a reset path that preserves the required memory.
+An isolated follow-up candidate has been prepared with a new USB attempt
+identity and panic marker, bounded inspection of the five crash slots and
+console, and UFS/SCSI/FAT-write paths disabled. Host fixtures cover wrapped
+markers, invalid bounds and unchanged input memory. The candidate does not
+trigger a panic itself. Its device execution and retention observations are
+`unverified`; testing requires a new explicit flash and panic authorization.
 
 The complete source-built Recovery, its UI warning, and the host-to-device
 relay still need their own target validation. Any further controlled panic,
@@ -247,3 +264,11 @@ the owner's separate approval. The inspected kernel tree has no pstore/blk
 backend or identified UFS panic-write path; the ordinary kernel stream saved
 before a crash is not a substitute for a persisted panic dump. Ubuntu Touch
 adaptation and an Android panic test are outside the current scope.
+
+CI run `40805647870` built a Recovery image but the final payload guard
+rejected it because both diagnostic executables were absent. The device's
+top-level `Android.mk` used AOSP's immediate-child scan, which did not reach
+`recovery/diagnostics/Android.mk`. The entry now includes that file explicitly;
+a Make integration test verifies both static modules and their Recovery
+installation paths before CI starts the full build. The final image guard
+remains mandatory. A fresh CI build and target validation are still required.

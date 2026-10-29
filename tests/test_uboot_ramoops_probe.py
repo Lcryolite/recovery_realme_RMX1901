@@ -10,6 +10,47 @@ HEADER = ROOT / "recovery/diagnostics/uboot_ramoops_probe.h"
 
 
 class UBootRamoopsProbeTest(unittest.TestCase):
+    def test_inspects_a_bounded_crash_slot_with_an_explicit_marker(self):
+        if not shutil.which("cc"):
+            self.skipTest("C compiler unavailable")
+        harness = r'''
+#include <stdint.h>
+#include <string.h>
+typedef uint32_t u32;
+typedef uint8_t u8;
+#include "uboot_ramoops_probe.h"
+int main(void) {
+    union { u32 alignment; u8 bytes[64]; } memory, original;
+    struct rmx1901_persistent_buffer *p = (void *)memory.bytes;
+    memset(&memory, 0, sizeof(memory));
+    p->sig = RMX1901_PERSISTENT_SIG;
+    p->size = 15;
+    p->start = 12;
+    memcpy(p->data, "BE1234567890PRO", 15);
+    memcpy(&original, &memory, sizeof(memory));
+    if (rmx1901_record_has_marker(p, sizeof(memory), "PROBE", 5) != 1) return 1;
+    if (rmx1901_record_has_marker(p, sizeof(memory), "OTHER", 5) != 0) return 2;
+    if (memcmp(&original, &memory, sizeof(memory))) return 3;
+    if (rmx1901_record_has_marker(p, sizeof(*p), "PROBE", 5) != -1) return 4;
+    if (rmx1901_record_has_marker(p, sizeof(memory), "", 0) != -1) return 5;
+    if (rmx1901_record_has_marker(p, sizeof(memory), "TOO-LONG-FOR-DATA", 17) != 0) return 6;
+    p->start = p->size + 1;
+    if (rmx1901_record_has_marker(p, sizeof(memory), "PROBE", 5) != -1) return 7;
+    p->start = 0;
+    p->size = sizeof(memory);
+    if (rmx1901_record_has_marker(p, sizeof(memory), "PROBE", 5) != -1) return 8;
+    p->size = 0;
+    if (rmx1901_record_has_marker(p, sizeof(memory), "PROBE", 5) != -1) return 9;
+    return 0;
+}
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            source, binary = Path(directory) / "test.c", Path(directory) / "test"
+            source.write_text(harness)
+            subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-I", str(HEADER.parent),
+                            str(source), "-o", str(binary)], check=True, capture_output=True)
+            subprocess.run([str(binary)], check=True)
+
     def test_reads_linear_and_wrapped_markers_without_changing_the_buffer(self):
         if not shutil.which("cc"):
             self.skipTest("C compiler unavailable")
