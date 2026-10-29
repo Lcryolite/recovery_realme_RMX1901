@@ -119,7 +119,8 @@ jobs:
 
     - name: Validate Recovery diagnostics
       run: |
-        for test in test_pstore_snapshot.py test_recovery_diagnostics.py test_uboot_ramoops_probe.py \
+        for test in test_diagnostics_make_integration.py test_pstore_snapshot.py \
+                    test_recovery_diagnostics.py test_uboot_ramoops_probe.py \
                     test_uboot_usb_console.py test_uboot_console_relay.py test_uboot_console_timeout.py \
                     test_uboot_logfs_guard.py test_uboot_logfs_slots.py test_uboot_logfs_writer.py; do
           env -i PATH="$PATH" LANG=C python3 -B -m unittest discover \
