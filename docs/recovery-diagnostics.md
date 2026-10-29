@@ -31,6 +31,11 @@ replayed from `/dev/kmsg` and earlier records are skipped. An uncheckpointed
 tail or a gap in the available sequence is marked partial; if the ring has
 already overwritten the missing data, replay cannot recover it.
 
+For manual CLI checks, `--once` and `--device-once` require a regular kernel
+input file with an end of file. Use `--stream` for a live source such as
+`/dev/kmsg`; `--service` also uses continuous capture. One-shot mode rejects
+character devices and other non-regular inputs rather than waiting indefinitely.
+
 The private archive is `/cache/recovery/rmx1901-diagnostics`. Its `current`,
 `previous`, and `oldest` directories contain at most three boot sessions. A
 session reserves up to 3 MiB for pstore, 1 MiB for the latest kernel stream,
@@ -193,17 +198,50 @@ automatic retention, crash interruption and power-loss durability remain
 unverified. A third approved one-shot candidate recognized both earlier
 records and created slot 3 with sequence 1. Its USB output reported successful
 sync and readback; all three records matched after Recovery was entered through
-fastboot, and the same pre-existing FAT warning remained. The rotation of an
-existing on-device slot remains unverified. Do not repurpose partitions based
-on their names.
+fastboot, and the same pre-existing FAT warning remained. On 2026-10-29, a
+fourth, separately authorized one-shot candidate replaced only `RMXLOG01.LOG`
+with a 1,201-byte sequence-2 record. USB reported successful sync and readback.
+After the owner manually entered Recovery through fastboot, the new record
+was recovered with its expected candidate identity and sequence; slots 2 and
+3 retained their exact previous content hashes. The full partition comparison
+changed only slot 1's directory entry and file data; both FAT copies were
+unchanged, and the read-only FAT report was identical apart from the image
+path. This verifies one on-device replacement and retention through the tested
+path. Repeated automatic rotation, interrupted writes and power-loss durability
+remain unverified. Do not repurpose partitions based on their names.
 
 The new ARM archive program was also run against all three retained records
 using an isolated `/tmp` fixture. It copied each record with matching hashes and
-left `logfs` unchanged. Its integration into the source-built Recovery and
-the real `/cache` service path still require device validation.
+left `logfs` unchanged. A separately authorized 2026-10-29 test then used an
+isolated directory on the device's actual F2FS `/cache`. All three U-Boot
+records matched their source hashes, and continuous kernel capture plus a
+same-boot process restart produced 4,227 kernel records with no duplicate
+sequence numbers. Status was `ok` with `reason=pstore_empty` both during and
+after capture. The owner confirmed that the kernel and three U-Boot log files
+were visible in the Recovery file manager and navigation worked. The dedicated
+test directory was removed afterwards, and `logfs` retained its original hash.
+This validates the ARM archive CLI and actual cache storage; automatic init
+service startup, the final archive path and UI warnings in the source-built
+Recovery still need integrated validation.
 
-Panic persistence, the complete source-built Recovery, its UI warning, and
-the host-to-device relay need their own target validation. A controlled panic,
+On 2026-10-29, a separately authorized Recovery panic test verified a unique
+marker in the live kernel ring, issued `echo c > /proc/sysrq-trigger` exactly
+once, and observed ADB disconnect followed by the U-Boot diagnostic USB
+interface. The owner manually returned through fastboot to Recovery. Ramoops
+registered successfully and pstore was mounted, but `/sys/fs/pstore` was empty,
+`/proc/last_kmsg` was absent, and the marker was not in the new kernel ring.
+No panic record was recovered: panic persistence has not passed this test.
+This observation does not distinguish a failure to write the crash record
+from its later loss, or identify which reboot phase is responsible. The boot,
+Recovery and logfs partition hashes were unchanged by this test.
+The returning Recovery's PMIC log reported `Hard Reset` and `cold` boot, and
+the owner confirmed a long button press to leave U-Boot. This test therefore
+included a forced reset; it does not isolate fastboot alone or a warm-only
+reset path. A future test needs to inspect records before that forced reset,
+or separately establish a reset path that preserves the required memory.
+
+The complete source-built Recovery, its UI warning, and the host-to-device
+relay still need their own target validation. Any further controlled panic,
 each image flash or restoration, and any bootloader or partition change require
 the owner's separate approval. The inspected kernel tree has no pstore/blk
 backend or identified UFS panic-write path; the ordinary kernel stream saved

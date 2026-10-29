@@ -739,6 +739,11 @@ static int capture_kernel(int session, const char *input_path, const char *statu
     if (input < 0) goto done;
     if (fstat(input, &st)) goto done;
     bool input_is_char = S_ISCHR(st.st_mode);
+    if (once && !S_ISREG(st.st_mode)) {
+        fprintf(stderr, "one-shot capture requires a regular kernel input file; use --stream for live input\n");
+        errno = EINVAL;
+        goto done;
+    }
     if (saved_kernel_sequence(session, &have_saved, &saved_sequence) ||
         read_kernel_checkpoint(session, &have_resume, &resume_sequence)) goto done;
     if (have_saved && (!have_resume || saved_sequence > resume_sequence) && mark_kernel_truncated(session))

@@ -29,6 +29,19 @@ class RecoveryDiagnosticsTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.directory.cleanup()
 
+    def test_once_rejects_a_character_device_as_kernel_input(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, cache, status = (root / name for name in ("pstore", "cache", "status"))
+            source.mkdir()
+            cache.mkdir()
+            result = subprocess.run([str(self.binary), "--once", str(source), str(cache),
+                                     "boot-001", "/dev/null", str(status)],
+                                    capture_output=True, text=True, timeout=5)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("state=error", status.read_text())
+            self.assertIn("requires a regular kernel input file", result.stderr)
+
     def test_recreates_missing_cache_log_directory_after_wipe(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
